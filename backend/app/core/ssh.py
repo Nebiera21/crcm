@@ -9,10 +9,19 @@ import functools
 import time
 from typing import TYPE_CHECKING
 
+import paramiko
 from netmiko import ConnectHandler
 from netmiko.exceptions import (
     NetmikoAuthenticationException,
     NetmikoTimeoutException,
+)
+
+# Cisco IOS SSH-1.x only advertises ssh-rsa host keys and SHA-1 KEX algorithms.
+# Paramiko 3.x moved these to the back of the preference list; ensure they are
+# included so legacy Cisco devices can negotiate a common algorithm set.
+_LEGACY_KEYS = ("ssh-rsa",)
+paramiko.Transport._preferred_keys = paramiko.Transport._preferred_keys + tuple(
+    k for k in _LEGACY_KEYS if k not in paramiko.Transport._preferred_keys
 )
 
 if TYPE_CHECKING:
