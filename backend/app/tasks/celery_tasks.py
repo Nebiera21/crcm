@@ -20,16 +20,36 @@ celery_app.conf.update(
 )
 
 
+def _celery_session():
+    """
+    Return a session factory backed by a NullPool engine.
+
+    Celery tasks call asyncio.run() which creates a new event loop each time.
+    The shared engine in database.py keeps an asyncpg connection pool whose
+    Futures are tied to a specific loop — reusing them across asyncio.run()
+    calls raises 'Future attached to a different loop'.
+
+    NullPool never caches connections, so each session gets a fresh connection
+    that is opened and closed inside the same asyncio.run() call.
+    """
+    from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import NullPool
+    engine = create_async_engine(settings.DATABASE_URL, poolclass=NullPool)
+    return sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+
 def _fetch_data_for_bulk(router_ids: list[str]) -> tuple:
     """Fetch routers + credentials from DB inside a fresh event loop (Celery worker context)."""
     import uuid
     from sqlalchemy import select
-    from app.database import AsyncSessionLocal
     from app.models.router import Router
     from app.models.global_credentials import GlobalCredentials
 
+    SessionLocal = _celery_session()
+
     async def _query():
-        async with AsyncSessionLocal() as db:
+        async with SessionLocal() as db:
             creds = (await db.execute(select(GlobalCredentials).where(GlobalCredentials.id == 1))).scalar_one_or_none()
             if not creds:
                 raise ValueError("No SSH credentials configured")
@@ -48,12 +68,13 @@ def _fetch_deploy_data(router_ids: list[str]) -> tuple:
     """Returns (creds, {router_id_str: Router})."""
     import uuid
     from sqlalchemy import select
-    from app.database import AsyncSessionLocal
     from app.models.router import Router
     from app.models.global_credentials import GlobalCredentials
 
+    SessionLocal = _celery_session()
+
     async def _query():
-        async with AsyncSessionLocal() as db:
+        async with SessionLocal() as db:
             creds = (await db.execute(select(GlobalCredentials).where(GlobalCredentials.id == 1))).scalar_one_or_none()
             if not creds:
                 raise ValueError("No SSH credentials configured")
@@ -68,11 +89,12 @@ def _update_history_results(results: list[dict]) -> None:
     """Write deploy results back to ConfigHistory rows."""
     import uuid
     from sqlalchemy import select
-    from app.database import AsyncSessionLocal
     from app.models.config_history import ConfigHistory, DeployStatus
 
+    SessionLocal = _celery_session()
+
     async def _update():
-        async with AsyncSessionLocal() as db:
+        async with SessionLocal() as db:
             for r in results:
                 h = (await db.execute(
                     select(ConfigHistory).where(ConfigHistory.id == uuid.UUID(r["history_id"]))
