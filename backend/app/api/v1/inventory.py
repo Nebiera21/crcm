@@ -11,6 +11,7 @@ from app.database import get_db
 from app.models.audit_log import AuditLog
 from app.models.global_credentials import GlobalCredentials
 from app.models.router import Router
+from app.models.ssh_credential import SshCredential
 from app.models.user import User
 from app.schemas.monitor import TestConnectionResult
 from app.schemas.router import (
@@ -249,7 +250,11 @@ async def test_connection(
     if not r:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Router not found")
 
-    creds = (await db.execute(select(GlobalCredentials).where(GlobalCredentials.id == 1))).scalar_one_or_none()
+    if r.credential_id:
+        creds = (await db.execute(select(SshCredential).where(SshCredential.id == r.credential_id))).scalar_one_or_none()
+    else:
+        creds = (await db.execute(select(GlobalCredentials).where(GlobalCredentials.id == 1))).scalar_one_or_none()
+
     if not creds:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

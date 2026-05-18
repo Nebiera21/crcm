@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends
 from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,7 +19,7 @@ async def dashboard_stats(
     _: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> DashboardStats:
-    thirty_days_ago = datetime.now(timezone.utc) - timedelta(days=30)
+    thirty_days_ago = datetime.now() - timedelta(days=30)
 
     routers_total = (await db.execute(select(func.count()).select_from(Router))).scalar() or 0
     routers_active = (await db.execute(

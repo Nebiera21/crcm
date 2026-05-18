@@ -66,7 +66,7 @@ celery -A app.tasks.celery_tasks worker --loglevel=info --concurrency=10
 4. Celery worker opens Netmiko SSH sessions (max 10 concurrent), sends rendered config, saves result to `config_history`
 
 ### SSH credentials
-All routers share **one global credential set** stored in `global_credentials` (single-row table, `id` always = 1). Passwords encrypted with **AES-256 Fernet** using `ENCRYPTION_KEY` from env — decrypted in memory at SSH time, never returned via API. `core/security.py` owns encrypt/decrypt. `core/ssh.py` owns `build_device_dict()` which takes a `GlobalCredentials` row and returns a Netmiko-ready dict.
+Each router can have a specific named credential set via `routers.credential_id` (nullable FK → `ssh_credentials`). When null, the router falls back to the single-row `global_credentials` table (id always = 1). Both models have the same duck-typed interface (`username`, `password_encrypted`, `enable_password_encrypted`) so `build_device_dict()` in `core/ssh.py` accepts either. Passwords encrypted with **AES-256 Fernet** using `ENCRYPTION_KEY` from env — never returned via API. `core/security.py` owns encrypt/decrypt.
 
 ### Async boundary
 FastAPI routes are `async`. Netmiko (synchronous) runs either:
@@ -170,9 +170,16 @@ PUT    /api/v1/inventory/routers/{id}
 DELETE /api/v1/inventory/routers/{id}
 POST   /api/v1/inventory/routers/{id}/test-connection
 
-# Credentials
+# Credentials (global fallback)
 GET    /api/v1/credentials/
 PUT    /api/v1/credentials/
+
+# Named SSH credentials (per-router)
+GET    /api/v1/credentials/ssh
+POST   /api/v1/credentials/ssh
+GET    /api/v1/credentials/ssh/{id}
+PUT    /api/v1/credentials/ssh/{id}
+DELETE /api/v1/credentials/ssh/{id}
 
 # Monitor
 GET    /api/v1/monitor/commands/available

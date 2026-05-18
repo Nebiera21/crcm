@@ -20,6 +20,7 @@ class RouterCreate(BaseModel):
     is_active: bool = True
     snmp_community: str | None = None
     notes: str | None = None
+    credential_id: uuid.UUID | None = None
 
     @field_validator("hostname")
     @classmethod
@@ -43,6 +44,7 @@ class RouterUpdate(BaseModel):
     is_active: bool | None = None
     snmp_community: str | None = None
     notes: str | None = None
+    credential_id: uuid.UUID | None = None
 
     @field_validator("ip_address", mode="before")
     @classmethod
@@ -63,6 +65,7 @@ class RouterResponse(BaseModel):
     is_active: bool
     snmp_community: str | None
     notes: str | None
+    credential_id: uuid.UUID | None
     created_at: datetime
     updated_at: datetime
 

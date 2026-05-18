@@ -7,6 +7,7 @@ export interface Router {
   is_active: boolean
   snmp_community: string | null
   notes: string | null
+  credential_id: string | null
   created_at: string
   updated_at: string
 }
@@ -19,6 +20,7 @@ export interface RouterCreate {
   is_active?: boolean
   snmp_community?: string | null
   notes?: string | null
+  credential_id?: string | null
 }
 
 export type RouterUpdate = Partial<RouterCreate>

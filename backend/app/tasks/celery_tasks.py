@@ -40,47 +40,63 @@ def _celery_session():
 
 
 def _fetch_data_for_bulk(router_ids: list[str]) -> tuple:
-    """Fetch routers + credentials from DB inside a fresh event loop (Celery worker context)."""
+    """Fetch routers + per-router credentials from DB inside a fresh event loop."""
     import uuid
     from sqlalchemy import select
     from app.models.router import Router
     from app.models.global_credentials import GlobalCredentials
+    from app.models.ssh_credential import SshCredential
 
     SessionLocal = _celery_session()
 
     async def _query():
         async with SessionLocal() as db:
-            creds = (await db.execute(select(GlobalCredentials).where(GlobalCredentials.id == 1))).scalar_one_or_none()
-            if not creds:
-                raise ValueError("No SSH credentials configured")
+            global_creds = (await db.execute(select(GlobalCredentials).where(GlobalCredentials.id == 1))).scalar_one_or_none()
 
             routers = []
             for rid in router_ids:
                 r = (await db.execute(select(Router).where(Router.id == uuid.UUID(rid)))).scalar_one_or_none()
                 if r:
                     routers.append(r)
-            return creds, routers
+
+            # Collect all unique credential IDs needed
+            cred_ids = {r.credential_id for r in routers if r.credential_id}
+            ssh_creds = {}
+            for cid in cred_ids:
+                c = (await db.execute(select(SshCredential).where(SshCredential.id == cid))).scalar_one_or_none()
+                if c:
+                    ssh_creds[cid] = c
+
+            return global_creds, routers, ssh_creds
 
     return asyncio.run(_query())
 
 
 def _fetch_deploy_data(router_ids: list[str]) -> tuple:
-    """Returns (creds, {router_id_str: Router})."""
+    """Returns (global_creds, {router_id_str: Router}, {cred_id: SshCredential})."""
     import uuid
     from sqlalchemy import select
     from app.models.router import Router
     from app.models.global_credentials import GlobalCredentials
+    from app.models.ssh_credential import SshCredential
 
     SessionLocal = _celery_session()
 
     async def _query():
         async with SessionLocal() as db:
-            creds = (await db.execute(select(GlobalCredentials).where(GlobalCredentials.id == 1))).scalar_one_or_none()
-            if not creds:
-                raise ValueError("No SSH credentials configured")
+            global_creds = (await db.execute(select(GlobalCredentials).where(GlobalCredentials.id == 1))).scalar_one_or_none()
             ids = [uuid.UUID(r) for r in router_ids]
             rows = (await db.execute(select(Router).where(Router.id.in_(ids)))).scalars().all()
-            return creds, {str(r.id): r for r in rows}
+            routers_map = {str(r.id): r for r in rows}
+
+            cred_ids = {r.credential_id for r in rows if r.credential_id}
+            ssh_creds = {}
+            for cid in cred_ids:
+                c = (await db.execute(select(SshCredential).where(SshCredential.id == cid))).scalar_one_or_none()
+                if c:
+                    ssh_creds[cid] = c
+
+            return global_creds, routers_map, ssh_creds
 
     return asyncio.run(_query())
 
@@ -112,12 +128,14 @@ def _update_history_results(results: list[dict]) -> None:
 def bulk_show_commands(self, router_ids: list[str], commands: list[str]) -> dict:
     from app.core.ssh import run_commands_sync, build_device_dict
 
-    try:
-        creds, routers = _fetch_data_for_bulk(router_ids)
-    except ValueError as exc:
-        return {"error": str(exc), "results": {}}
+    global_creds, routers, ssh_creds = _fetch_data_for_bulk(router_ids)
 
     def _run(r) -> tuple[str, dict]:
+        creds = ssh_creds.get(r.credential_id) if r.credential_id else None
+        if creds is None:
+            creds = global_creds
+        if creds is None:
+            raise ValueError("No SSH credentials configured")
         device = build_device_dict(r.ip_address, creds)
         results = run_commands_sync(device, commands)
         return str(r.id), {"hostname": r.hostname, "ip_address": r.ip_address, "results": results}
@@ -145,16 +163,19 @@ def deploy_config(self, router_id: str, rendered_config: str, history_id: str, d
     """Deploy rendered config to a single router."""
     from app.core.ssh import build_device_dict, deploy_config_sync, run_commands_sync
 
-    try:
-        creds, routers_map = _fetch_deploy_data([router_id])
-    except ValueError as exc:
-        _update_history_results([{"history_id": history_id, "status": "failed", "output": str(exc)}])
-        return {"status": "failed", "error": str(exc)}
+    global_creds, routers_map, ssh_creds = _fetch_deploy_data([router_id])
 
     router = routers_map.get(router_id)
     if not router:
         _update_history_results([{"history_id": history_id, "status": "failed", "output": "Router not found"}])
         return {"status": "failed"}
+
+    creds = ssh_creds.get(router.credential_id) if router.credential_id else None
+    if creds is None:
+        creds = global_creds
+    if creds is None:
+        _update_history_results([{"history_id": history_id, "status": "failed", "output": "No SSH credentials configured"}])
+        return {"status": "failed", "error": "No SSH credentials configured"}
 
     device = build_device_dict(router.ip_address, creds)
 
@@ -188,21 +209,20 @@ def bulk_deploy_configs(self, jobs: list[dict]) -> dict:
     from app.core.ssh import build_device_dict, deploy_config_sync, run_commands_sync
 
     router_ids = [j["router_id"] for j in jobs]
-    try:
-        creds, routers_map = _fetch_deploy_data(router_ids)
-    except ValueError as exc:
-        failed = [
-            {"history_id": j["history_id"], "router_id": j["router_id"], "status": "failed", "output": str(exc)}
-            for j in jobs
-        ]
-        _update_history_results(failed)
-        return {"results": failed}
+    global_creds, routers_map, ssh_creds = _fetch_deploy_data(router_ids)
 
     def do_deploy(job: dict) -> dict:
         router = routers_map.get(job["router_id"])
         if not router:
             return {"history_id": job["history_id"], "router_id": job["router_id"],
                     "status": "failed", "output": "Router not found", "snapshot": None}
+
+        creds = ssh_creds.get(router.credential_id) if router.credential_id else None
+        if creds is None:
+            creds = global_creds
+        if creds is None:
+            return {"history_id": job["history_id"], "router_id": job["router_id"],
+                    "status": "failed", "output": "No SSH credentials configured", "snapshot": None}
 
         device = build_device_dict(router.ip_address, creds)
 

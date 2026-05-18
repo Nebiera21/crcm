@@ -8,8 +8,10 @@ import {
   updateRouter,
 } from '@/services/routerService'
 import { testConnection } from '@/services/monitorService'
+import { listSshCredentials } from '@/services/credentialsService'
 import { useAuthStore } from '@/store/authStore'
 import type { ImportResult, Router, RouterCreate } from '@/types/router'
+import type { SshCredentialItem } from '@/types/credentials'
 
 interface TestState {
   loading: boolean
@@ -47,9 +49,15 @@ function RouterFormModal({ router: existing, onClose, onSaved }: RouterFormModal
     snmp_community: existing?.snmp_community ?? '',
     notes: existing?.notes ?? '',
     is_active: existing?.is_active ?? true,
+    credential_id: existing?.credential_id ?? '',
   })
+  const [sshCreds, setSshCreds] = useState<SshCredentialItem[]>([])
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    listSshCredentials().then((r) => setSshCreds(r.items)).catch(() => {})
+  }, [])
 
   function set(field: string, value: string | boolean) {
     setForm((f) => ({ ...f, [field]: value }))
@@ -72,6 +80,7 @@ function RouterFormModal({ router: existing, onClose, onSaved }: RouterFormModal
         snmp_community: form.snmp_community.trim() || null,
         notes: form.notes.trim() || null,
         is_active: form.is_active,
+        credential_id: form.credential_id || null,
       }
       if (isEdit) {
         await updateRouter(existing!.id, payload)
@@ -107,6 +116,21 @@ function RouterFormModal({ router: existing, onClose, onSaved }: RouterFormModal
           <div className="grid grid-cols-2 gap-4">
             <Field label="Location" value={form.location} onChange={(v) => set('location', v)} placeholder="Headquarters" />
             <Field label="Model" value={form.model} onChange={(v) => set('model', v)} placeholder="Cisco 867VAE" />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-1.5">
+              SSH Credential <span className="text-gray-500 font-normal">(optional — uses global default if unset)</span>
+            </label>
+            <select
+              value={form.credential_id}
+              onChange={(e) => set('credential_id', e.target.value)}
+              className="w-full rounded-lg bg-gray-800 border border-gray-700 px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-brand-500"
+            >
+              <option value="">Global default</option>
+              {sshCreds.map((c) => (
+                <option key={c.id} value={c.id}>{c.name} ({c.username})</option>
+              ))}
+            </select>
           </div>
           <Field label="SNMP Community" value={form.snmp_community} onChange={(v) => set('snmp_community', v)} placeholder="public" />
           <div>

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
   Activity,
@@ -6,6 +6,7 @@ import {
   CheckCircle,
   Clock,
   FileCode2,
+  RefreshCw,
   RotateCcw,
   Send,
   Server,
@@ -147,13 +148,28 @@ export default function DashboardPage() {
   const { user } = useAuthStore()
   const [stats, setStats] = useState<DashboardStats | null>(null)
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(false)
+  const [lastRefresh, setLastRefresh] = useState<Date | null>(null)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    setError(false)
+    try {
+      const data = await getDashboardStats()
+      setStats(data)
+      setLastRefresh(new Date())
+    } catch {
+      setError(true)
+    } finally {
+      setLoading(false)
+    }
+  }, [])
 
   useEffect(() => {
-    getDashboardStats()
-      .then(setStats)
-      .catch(() => null)
-      .finally(() => setLoading(false))
-  }, [])
+    load()
+    const timer = setInterval(load, 30_000)
+    return () => clearInterval(timer)
+  }, [load])
 
   const successRate =
     stats && stats.deploys_last_30d > 0
@@ -163,10 +179,33 @@ export default function DashboardPage() {
   return (
     <div className="p-6 max-w-5xl mx-auto space-y-8">
       {/* Header */}
-      <div>
-        <h1 className="text-2xl font-bold text-white">Dashboard</h1>
-        <p className="text-sm text-gray-400 mt-0.5">Welcome back, {user?.username}.</p>
+      <div className="flex items-start justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-white">Dashboard</h1>
+          <p className="text-sm text-gray-400 mt-0.5">Welcome back, {user?.username}.</p>
+        </div>
+        <div className="flex items-center gap-3">
+          {lastRefresh && !loading && (
+            <span className="text-xs text-gray-600 hidden sm:block">
+              Updated {lastRefresh.toLocaleTimeString()}
+            </span>
+          )}
+          <button
+            onClick={load}
+            disabled={loading}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-gray-400 hover:text-white border border-gray-700 hover:border-gray-600 rounded-lg transition disabled:opacity-50"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+            Refresh
+          </button>
+        </div>
       </div>
+
+      {error && (
+        <div className="bg-red-900/20 border border-red-800 rounded-xl px-4 py-3 text-sm text-red-400">
+          Failed to load dashboard data. Check your connection and try refreshing.
+        </div>
+      )}
 
       {/* Stats grid */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
