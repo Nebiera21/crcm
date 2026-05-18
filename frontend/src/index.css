@@ -1,0 +1,15 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-gray-950 text-gray-100 antialiased;
+  }
+}
+
+@layer components {
+  .input-sm {
+    @apply bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm text-white outline-none focus:border-brand-600 transition-colors placeholder:text-gray-600;
+  }
+}
