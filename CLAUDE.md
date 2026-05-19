@@ -262,6 +262,31 @@ The backend startup calls `create_first_admin` which seeds the DB. Default crede
 
 ---
 
+## Deploying Code Changes to Docker
+
+When you change backend Python code or add a migration, and the app runs in Docker:
+
+```bash
+# 1. Run new migrations (never skip this after model changes)
+docker compose exec backend alembic upgrade head
+
+# 2. Restart backend + celery to pick up code changes
+docker compose restart backend celery
+```
+
+When you change frontend code (React/TypeScript), the nginx container serves a compiled build — you must rebuild the image:
+
+```bash
+# Rebuild and restart frontend only
+docker compose build frontend && docker compose up -d frontend
+```
+
+Then do a **hard refresh** in the browser (`Cmd+Shift+R`) to clear the cached JS bundle.
+
+> Missing migrations cause 500 errors on every endpoint that touches the affected table. Frontend code changes are invisible until the image is rebuilt — the browser will serve the old bundle even after a normal refresh.
+
+---
+
 ## Dependency Gotchas
 
 - **`bcrypt` is pinned to `3.2.2`** — `passlib 1.7.4` is incompatible with `bcrypt >= 4.0` because `detect_wrap_bug()` uses a >72-byte secret that newer bcrypt rejects with `ValueError`. Do not upgrade bcrypt without also replacing passlib.
