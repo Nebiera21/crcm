@@ -158,6 +158,18 @@ function DetailDrawer({
                 <p className="text-xs text-gray-500 mb-0.5">Deployed</p>
                 <p className="text-white">{new Date(detail.deployed_at).toLocaleString()}</p>
               </div>
+              {detail.connected_via && (
+                <div>
+                  <p className="text-xs text-gray-500 mb-0.5">Connected via</p>
+                  {detail.connected_via === 'wan' ? (
+                    <span className="inline-flex items-center gap-1 text-xs font-medium text-amber-400 bg-amber-900/20 border border-amber-700/40 rounded px-2 py-0.5">
+                      WAN IP (fallback)
+                    </span>
+                  ) : (
+                    <span className="text-xs text-gray-400">Internal IP</span>
+                  )}
+                </div>
+              )}
             </div>
 
             {detail.rendered_config && (

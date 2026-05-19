@@ -27,6 +27,7 @@ export interface HistoryListItem {
   job_id: string | null
   deployed_at: string
   can_rollback: boolean
+  connected_via: string | null
 }
 
 export interface HistoryDetail extends HistoryListItem {

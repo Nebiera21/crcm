@@ -37,6 +37,7 @@ def _to_list_item(h: ConfigHistory, hostname: str | None, ip: str | None) -> His
         job_id=h.job_id,
         deployed_at=h.deployed_at,
         can_rollback=h.config_snapshot is not None and h.status == DeployStatus.success,
+        connected_via=h.connected_via,
     )
 
 

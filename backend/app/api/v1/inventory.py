@@ -143,7 +143,14 @@ async def import_routers(
             skipped += 1
             continue
 
-        wan_ip_raw = str(getattr(row, "wan_ip_address", "") or "").strip() or None
+        def _cell(attr: str) -> str:
+            """Return cell value as stripped string; treats pandas NaN as empty."""
+            v = getattr(row, attr, None)
+            if v is None or (isinstance(v, float) and v != v):
+                return ""
+            return str(v).strip()
+
+        wan_ip_raw: str | None = _cell("wan_ip_address") or None
         if wan_ip_raw:
             try:
                 ipaddress.ip_address(wan_ip_raw)
@@ -151,19 +158,18 @@ async def import_routers(
                 errors.append(f"Row {row_num}: invalid WAN IP address {wan_ip_raw!r} — skipping WAN IP")
                 wan_ip_raw = None
 
-        wan_port_raw = getattr(row, "wan_ssh_port", None)
+        wan_port_cell = _cell("wan_ssh_port")
         wan_port: int | None = None
-        if wan_port_raw is not None:
+        if wan_port_cell:
             try:
-                wan_port = int(wan_port_raw)
+                wan_port = int(float(wan_port_cell))
                 if not (1 <= wan_port <= 65535):
                     raise ValueError
             except (ValueError, TypeError):
-                errors.append(f"Row {row_num}: invalid wan_ssh_port {wan_port_raw!r} — using default 22")
+                errors.append(f"Row {row_num}: invalid wan_ssh_port {wan_port_cell!r} — using default 22")
                 wan_port = None
 
-        use_wan_raw = str(getattr(row, "use_wan_ip", "") or "").strip().lower()
-        use_wan = use_wan_raw in ("true", "1", "yes")
+        use_wan = _cell("use_wan_ip").lower() in ("true", "1", "yes")
 
         db.add(Router(
             hostname=hostname,
@@ -286,7 +292,7 @@ async def test_connection(
             detail="No SSH credentials configured. Set them in Admin → Credentials.",
         )
 
-    device = ssh.build_device_dict(r.ip_address, creds)
+    device = ssh.build_device_dict(r.ip_address, creds, timeout=10)
     success, message, latency_ms = await ssh.test_connection(device)
 
     if not success and ssh._is_timeout(message) and r.use_wan_ip and r.wan_ip_address:

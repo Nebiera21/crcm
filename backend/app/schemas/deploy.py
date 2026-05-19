@@ -45,6 +45,7 @@ class HistoryListItem(BaseModel):
     job_id: str | None
     deployed_at: datetime
     can_rollback: bool
+    connected_via: str | None
 
 
 class HistoryDetail(HistoryListItem):
