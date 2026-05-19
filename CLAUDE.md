@@ -81,8 +81,14 @@ Celery workers use `asyncio.run()` to run async SQLAlchemy queries inside sync t
 ### Auth
 JWT tokens via `python-jose`. Three roles: `admin`, `operator`, `readonly`. Role is embedded in the JWT claim and checked per-endpoint with a FastAPI dependency. See permissions table below.
 
+### Command presets (Monitor)
+Show commands are stored in `command_presets` (DB table, not hardcoded). Migration `0003` seeds 10 defaults. Admin CRUD via `GET/POST/DELETE /monitor/presets`. All roles can read; only admin can add/delete. The old `SHOW_COMMANDS` list in `core/ssh.py` is kept as a reference but is no longer used by the API.
+
+### Monitor — single vs bulk SSH routing
+`POST /monitor/commands` (single router, all roles) runs synchronously via `run_in_executor`. `POST /monitor/commands/bulk` (operator+) dispatches a Celery task and returns a `job_id` for polling. The frontend picks the path based on how many routers are selected: 1 → direct, 2+ → Celery. Both paths normalize to the same `RouterRunResult[]` shape on the frontend.
+
 ### SNMP polling
-`core/snmp.py` wraps pysnmp SNMPv2c GET calls in a synchronous function (`snmp_poll_sync`) with a 5-second timeout. Async shim via `run_in_executor`. OIDs polled: sysDescr, sysUpTime, sysName, Cisco avgBusy5 (CPU), Cisco freeMem, ifNumber. Requires `snmp_community` on the router row.
+`core/snmp.py` wraps pysnmp SNMPv2c GET calls in a synchronous function (`snmp_poll_sync`) with a 5-second timeout. Async shim via `run_in_executor`. OIDs polled: sysDescr, sysUpTime, sysName, Cisco avgBusy5 (CPU), Cisco freeMem, ifNumber. Requires `snmp_community` on the router row. Bulk SNMP (`POST /monitor/snmp/bulk`) uses the `bulk_snmp_poll` Celery task — routers without `snmp_community` return an error row rather than failing the whole job.
 
 ### Audit logging
 Every mutating action writes to `audit_logs` via `db.add(AuditLog(...))`. Pattern: `action = "<resource>.<verb>"` (e.g. `user.create`, `deploy.rollback`). The `detail` JSONB column stores relevant context. All roles can view and export audit logs via `GET /api/v1/audit/`.
@@ -118,7 +124,8 @@ Every mutating action writes to `audit_logs` via `db.add(AuditLog(...))`. Patter
 | Export audit log (CSV) | ✅ | ✅ | ✅ |
 | Manage users | ✅ | ❌ | ❌ |
 | Edit global credentials | ✅ | ❌ | ❌ |
-| SNMP poll | ✅ | ✅ | ✅ |
+| SNMP poll (single + bulk) | ✅ | ✅ | ✅ |
+| Add/delete command presets | ✅ | ❌ | ❌ |
 
 ---
 
@@ -181,11 +188,18 @@ GET    /api/v1/credentials/ssh/{id}
 PUT    /api/v1/credentials/ssh/{id}
 DELETE /api/v1/credentials/ssh/{id}
 
-# Monitor
-GET    /api/v1/monitor/commands/available
+# Monitor — command presets
+GET    /api/v1/monitor/presets
+POST   /api/v1/monitor/presets
+DELETE /api/v1/monitor/presets/{id}
+
+# Monitor — SSH commands
 POST   /api/v1/monitor/commands
 POST   /api/v1/monitor/commands/bulk
+
+# Monitor — SNMP
 POST   /api/v1/monitor/snmp/poll
+POST   /api/v1/monitor/snmp/bulk
 
 # Tasks
 GET    /api/v1/tasks/{job_id}
@@ -261,3 +275,4 @@ The backend startup calls `create_first_admin` which seeds the DB. Default crede
 - [x] Phase 6 — Monitoring & SNMP (SNMP poller, dashboard enhancements)
 - [x] Phase 7 — Polish (mobile responsive layout, audit log with CSV export, dashboard statistics)
 - [x] Phase 8 — Multi-credential support + pre-prod hardening (named SSH credential sets per router with global fallback; dashboard 30s auto-refresh; startup ENCRYPTION_KEY validation; deploy polling error handling; apiClient token refresh race fix)
+- [x] Phase 9 — Monitor module redesign (command presets in DB; multi-device SSH with Celery; multi-device SNMP bulk poll; compare modal with line-diff; CSV export; router selector with location/model filters)
