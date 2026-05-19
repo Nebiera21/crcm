@@ -41,22 +41,26 @@ SHOW_COMMANDS: list[str] = [
 ]
 
 
-def build_device_dict(host: str, creds: "GlobalCredentials") -> dict:
+def build_device_dict(host: str, creds: "GlobalCredentials", port: int = 22, timeout: int = 10) -> dict:
     from app.core.security import decrypt_secret
 
     return {
         "device_type": "cisco_ios",
         "host": host,
+        "port": port,
         "username": creds.username,
         "password": decrypt_secret(creds.password_encrypted),
         "secret": decrypt_secret(creds.enable_password_encrypted) if creds.enable_password_encrypted else "",
-        "timeout": 30,
+        "timeout": timeout,
         "session_timeout": 60,
         "fast_cli": False,
     }
 
 
 # ── Synchronous primitives ────────────────────────────────────────────────────
+
+_TIMEOUT_MARKER = "Connection timed out"
+
 
 def test_connection_sync(device: dict) -> tuple[bool, str, int | None]:
     """Returns (success, message, latency_ms)."""
@@ -68,7 +72,7 @@ def test_connection_sync(device: dict) -> tuple[bool, str, int | None]:
         ms = int((time.monotonic() - start) * 1000)
         return True, "Connection successful", ms
     except NetmikoTimeoutException:
-        return False, "Connection timed out (30s)", None
+        return False, f"{_TIMEOUT_MARKER} ({device.get('timeout', 10)}s)", None
     except NetmikoAuthenticationException:
         return False, "Authentication failed — check username/password", None
     except Exception as exc:
@@ -121,8 +125,12 @@ def deploy_config_sync(device: dict, config_lines: list[str]) -> tuple[bool, str
         conn.disconnect()
         return True, output
     except NetmikoTimeoutException:
-        return False, "Connection timed out (30s)"
+        return False, f"{_TIMEOUT_MARKER} ({device.get('timeout', 10)}s)"
     except NetmikoAuthenticationException:
         return False, "Authentication failed — check username/password"
     except Exception as exc:
         return False, f"Deploy error: {exc}"
+
+
+def _is_timeout(text: str) -> bool:
+    return _TIMEOUT_MARKER in text

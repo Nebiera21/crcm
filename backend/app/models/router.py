@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import String, Boolean, Text, ForeignKey, func
+from sqlalchemy import String, Boolean, Integer, Text, ForeignKey, func
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import UUID
 from app.database import Base
@@ -23,5 +23,8 @@ class Router(Base):
         nullable=True,
         index=True,
     )
+    wan_ip_address: Mapped[str | None] = mapped_column(String(45), nullable=True)
+    wan_ssh_port: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    use_wan_ip: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(nullable=False, server_default=func.now(), onupdate=func.now())

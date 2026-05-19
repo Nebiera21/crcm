@@ -8,6 +8,9 @@ export interface Router {
   snmp_community: string | null
   notes: string | null
   credential_id: string | null
+  wan_ip_address: string | null
+  wan_ssh_port: number | null
+  use_wan_ip: boolean
   created_at: string
   updated_at: string
 }
@@ -21,6 +24,9 @@ export interface RouterCreate {
   snmp_community?: string | null
   notes?: string | null
   credential_id?: string | null
+  wan_ip_address?: string | null
+  wan_ssh_port?: number | null
+  use_wan_ip?: boolean
 }
 
 export type RouterUpdate = Partial<RouterCreate>

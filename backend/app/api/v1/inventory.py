@@ -143,6 +143,28 @@ async def import_routers(
             skipped += 1
             continue
 
+        wan_ip_raw = str(getattr(row, "wan_ip_address", "") or "").strip() or None
+        if wan_ip_raw:
+            try:
+                ipaddress.ip_address(wan_ip_raw)
+            except ValueError:
+                errors.append(f"Row {row_num}: invalid WAN IP address {wan_ip_raw!r} — skipping WAN IP")
+                wan_ip_raw = None
+
+        wan_port_raw = getattr(row, "wan_ssh_port", None)
+        wan_port: int | None = None
+        if wan_port_raw is not None:
+            try:
+                wan_port = int(wan_port_raw)
+                if not (1 <= wan_port <= 65535):
+                    raise ValueError
+            except (ValueError, TypeError):
+                errors.append(f"Row {row_num}: invalid wan_ssh_port {wan_port_raw!r} — using default 22")
+                wan_port = None
+
+        use_wan_raw = str(getattr(row, "use_wan_ip", "") or "").strip().lower()
+        use_wan = use_wan_raw in ("true", "1", "yes")
+
         db.add(Router(
             hostname=hostname,
             ip_address=ip_raw,
@@ -150,6 +172,9 @@ async def import_routers(
             model=str(getattr(row, "model", "") or "").strip() or None,
             notes=str(getattr(row, "notes", "") or "").strip() or None,
             is_active=True,
+            wan_ip_address=wan_ip_raw,
+            wan_ssh_port=wan_port,
+            use_wan_ip=use_wan,
         ))
         created += 1
 
@@ -263,4 +288,11 @@ async def test_connection(
 
     device = ssh.build_device_dict(r.ip_address, creds)
     success, message, latency_ms = await ssh.test_connection(device)
+
+    if not success and ssh._is_timeout(message) and r.use_wan_ip and r.wan_ip_address:
+        wan_port = r.wan_ssh_port or 22
+        wan_device = ssh.build_device_dict(r.wan_ip_address, creds, port=wan_port, timeout=30)
+        success, wan_message, latency_ms = await ssh.test_connection(wan_device)
+        message = f"Connected via WAN IP ({r.wan_ip_address}:{wan_port})" if success else wan_message
+
     return TestConnectionResult(success=success, message=message, latency_ms=latency_ms)

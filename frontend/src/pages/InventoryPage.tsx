@@ -50,6 +50,9 @@ function RouterFormModal({ router: existing, onClose, onSaved }: RouterFormModal
     notes: existing?.notes ?? '',
     is_active: existing?.is_active ?? true,
     credential_id: existing?.credential_id ?? '',
+    wan_ip_address: existing?.wan_ip_address ?? '',
+    wan_ssh_port: existing?.wan_ssh_port != null ? String(existing.wan_ssh_port) : '',
+    use_wan_ip: existing?.use_wan_ip ?? false,
   })
   const [sshCreds, setSshCreds] = useState<SshCredentialItem[]>([])
   const [error, setError] = useState('')
@@ -72,6 +75,7 @@ function RouterFormModal({ router: existing, onClose, onSaved }: RouterFormModal
     setSaving(true)
     setError('')
     try {
+      const wanPort = form.wan_ssh_port.trim() ? parseInt(form.wan_ssh_port.trim(), 10) : null
       const payload: RouterCreate = {
         hostname: form.hostname.trim(),
         ip_address: form.ip_address.trim(),
@@ -81,6 +85,9 @@ function RouterFormModal({ router: existing, onClose, onSaved }: RouterFormModal
         notes: form.notes.trim() || null,
         is_active: form.is_active,
         credential_id: form.credential_id || null,
+        wan_ip_address: form.wan_ip_address.trim() || null,
+        wan_ssh_port: wanPort,
+        use_wan_ip: form.use_wan_ip,
       }
       if (isEdit) {
         await updateRouter(existing!.id, payload)
@@ -133,6 +140,27 @@ function RouterFormModal({ router: existing, onClose, onSaved }: RouterFormModal
             </select>
           </div>
           <Field label="SNMP Community" value={form.snmp_community} onChange={(v) => set('snmp_community', v)} placeholder="public" />
+
+          {/* WAN IP section */}
+          <div className="border border-gray-700 rounded-lg p-3 space-y-3">
+            <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">WAN Fallback (SSH)</p>
+            <div className="grid grid-cols-3 gap-3">
+              <div className="col-span-2">
+                <Field label="WAN IP Address" value={form.wan_ip_address} onChange={(v) => set('wan_ip_address', v)} placeholder="203.0.113.1" />
+              </div>
+              <Field label="SSH Port" value={form.wan_ssh_port} onChange={(v) => set('wan_ssh_port', v)} placeholder="22" />
+            </div>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={form.use_wan_ip}
+                onChange={(e) => set('use_wan_ip', e.target.checked)}
+                className="w-4 h-4 accent-brand-600"
+              />
+              <span className="text-sm text-gray-300">Use WAN IP as fallback on connection timeout</span>
+            </label>
+          </div>
+
           <div>
             <label className="block text-sm font-medium text-gray-300 mb-1.5">Notes</label>
             <textarea
@@ -274,9 +302,9 @@ function ImportModal({ onClose, onDone }: { onClose: () => void; onDone: () => v
         <h2 className="text-lg font-semibold text-white mb-1">Import Routers</h2>
         <p className="text-sm text-gray-400 mb-5">
           Upload a <code className="text-gray-300">.csv</code> or{' '}
-          <code className="text-gray-300">.xlsx</code> file with columns:{' '}
-          <code className="text-gray-300">hostname</code>, <code className="text-gray-300">ip_address</code>,
-          location, model, notes.
+          <code className="text-gray-300">.xlsx</code> file. Required:{' '}
+          <code className="text-gray-300">hostname</code>, <code className="text-gray-300">ip_address</code>.{' '}
+          Optional: location, model, notes, wan_ip_address, wan_ssh_port, use_wan_ip.
         </p>
 
         <div
@@ -470,6 +498,7 @@ export default function InventoryPage() {
               <tr className="border-b border-gray-800">
                 <Th>Hostname</Th>
                 <Th>IP Address</Th>
+                <Th>WAN IP</Th>
                 <Th>Location</Th>
                 <Th>Model</Th>
                 <Th>Status</Th>
@@ -479,14 +508,14 @@ export default function InventoryPage() {
             <tbody>
               {loading && (
                 <tr>
-                  <td colSpan={6} className="px-6 py-10 text-center text-gray-500">
+                  <td colSpan={7} className="px-6 py-10 text-center text-gray-500">
                     Loading…
                   </td>
                 </tr>
               )}
               {!loading && routers.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="px-6 py-12 text-center text-gray-500">
+                  <td colSpan={7} className="px-6 py-12 text-center text-gray-500">
                     {search ? 'No routers match your search.' : 'No routers yet. Add your first router or import from CSV.'}
                   </td>
                 </tr>
@@ -497,6 +526,14 @@ export default function InventoryPage() {
                   <tr key={r.id} className="border-b border-gray-800/50 hover:bg-gray-800/30 transition-colors">
                     <td className="px-6 py-3 font-medium text-white">{r.hostname}</td>
                     <td className="px-6 py-3 font-mono text-gray-300">{r.ip_address}</td>
+                    <td className="px-6 py-3 font-mono text-gray-400">
+                      {r.wan_ip_address ? (
+                        <span className={r.use_wan_ip ? 'text-amber-400' : 'text-gray-500'} title={r.use_wan_ip ? 'WAN fallback enabled' : 'WAN fallback disabled'}>
+                          {r.wan_ip_address}
+                          {r.wan_ssh_port && r.wan_ssh_port !== 22 ? `:${r.wan_ssh_port}` : ''}
+                        </span>
+                      ) : '—'}
+                    </td>
                     <td className="px-6 py-3 text-gray-400">{r.location ?? '—'}</td>
                     <td className="px-6 py-3 text-gray-400">{r.model ?? '—'}</td>
                     <td className="px-6 py-3">

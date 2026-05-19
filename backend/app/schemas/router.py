@@ -21,6 +21,9 @@ class RouterCreate(BaseModel):
     snmp_community: str | None = None
     notes: str | None = None
     credential_id: uuid.UUID | None = None
+    wan_ip_address: str | None = None
+    wan_ssh_port: int | None = None
+    use_wan_ip: bool = False
 
     @field_validator("hostname")
     @classmethod
@@ -35,6 +38,13 @@ class RouterCreate(BaseModel):
     def validate_ip(cls, v: str) -> str:
         return _validate_ip(v)
 
+    @field_validator("wan_ip_address", mode="before")
+    @classmethod
+    def validate_wan_ip(cls, v: str | None) -> str | None:
+        if not v or not str(v).strip():
+            return None
+        return _validate_ip(str(v).strip())
+
 
 class RouterUpdate(BaseModel):
     hostname: str | None = None
@@ -45,6 +55,9 @@ class RouterUpdate(BaseModel):
     snmp_community: str | None = None
     notes: str | None = None
     credential_id: uuid.UUID | None = None
+    wan_ip_address: str | None = None
+    wan_ssh_port: int | None = None
+    use_wan_ip: bool | None = None
 
     @field_validator("ip_address", mode="before")
     @classmethod
@@ -52,6 +65,13 @@ class RouterUpdate(BaseModel):
         if v is None:
             return v
         return _validate_ip(v)
+
+    @field_validator("wan_ip_address", mode="before")
+    @classmethod
+    def validate_wan_ip(cls, v: str | None) -> str | None:
+        if not v or not str(v).strip():
+            return None
+        return _validate_ip(str(v).strip())
 
 
 class RouterResponse(BaseModel):
@@ -66,6 +86,9 @@ class RouterResponse(BaseModel):
     snmp_community: str | None
     notes: str | None
     credential_id: uuid.UUID | None
+    wan_ip_address: str | None
+    wan_ssh_port: int | None
+    use_wan_ip: bool
     created_at: datetime
     updated_at: datetime
 

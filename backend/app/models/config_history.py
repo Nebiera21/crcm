@@ -26,4 +26,5 @@ class ConfigHistory(Base):
     status: Mapped[DeployStatus] = mapped_column(SAEnum(DeployStatus, name="deploy_status"), nullable=False, default=DeployStatus.pending)
     output: Mapped[str | None] = mapped_column(Text, nullable=True)
     job_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    connected_via: Mapped[str | None] = mapped_column(String(16), nullable=True)
     deployed_at: Mapped[datetime] = mapped_column(nullable=False, server_default=func.now(), index=True)

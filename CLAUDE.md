@@ -90,6 +90,9 @@ Show commands are stored in `command_presets` (DB table, not hardcoded). Migrati
 ### SNMP polling
 `core/snmp.py` wraps pysnmp SNMPv2c GET calls in a synchronous function (`snmp_poll_sync`) with a 5-second timeout. Async shim via `run_in_executor`. OIDs polled: sysDescr, sysUpTime, sysName, Cisco avgBusy5 (CPU), Cisco freeMem, ifNumber. Requires `snmp_community` on the router row. Bulk SNMP (`POST /monitor/snmp/bulk`) uses the `bulk_snmp_poll` Celery task — routers without `snmp_community` return an error row rather than failing the whole job.
 
+### WAN IP fallback
+Each router has three optional fields: `wan_ip_address`, `wan_ssh_port` (default 22), `use_wan_ip` (bool). When `use_wan_ip=True` and the internal SSH attempt times out (10s), the deploy task and test-connection endpoint automatically retry via the WAN IP with `timeout=30`. On WAN success, `config_history.connected_via` is set to `"wan"` and output is prefixed with `"Connected via WAN IP (x.x.x.x:port)\n"`. Monitor SSH commands and SNMP do **not** use WAN fallback. Migration `0004` adds the four new columns (`wan_ip_address`, `wan_ssh_port`, `use_wan_ip` on `routers`; `connected_via` on `config_history`). Import (Excel/CSV) supports these three columns. `_is_timeout(text)` in `core/ssh.py` detects timeout failures using `_TIMEOUT_MARKER`; use it before branching to WAN.
+
 ### Audit logging
 Every mutating action writes to `audit_logs` via `db.add(AuditLog(...))`. Pattern: `action = "<resource>.<verb>"` (e.g. `user.create`, `deploy.rollback`). The `detail` JSONB column stores relevant context. All roles can view and export audit logs via `GET /api/v1/audit/`.
 
@@ -132,13 +135,18 @@ Every mutating action writes to `audit_logs` via `db.add(AuditLog(...))`. Patter
 ## Netmiko Connection Pattern
 
 ```python
-from app.core.ssh import build_device_dict
-from app.models.global_credentials import GlobalCredentials
+from app.core.ssh import build_device_dict, _is_timeout
 
-# creds: GlobalCredentials row fetched from DB
-device = build_device_dict(router.ip_address, creds)
-# device = {device_type: "cisco_ios", host, username, password (decrypted),
-#           secret (decrypted enable), timeout: 30, session_timeout: 60}
+# creds: GlobalCredentials or SshCredential row fetched from DB
+device = build_device_dict(router.ip_address, creds)                         # timeout=10 (default)
+wan_device = build_device_dict(wan_ip, creds, port=wan_port, timeout=30)     # WAN fallback
+
+# device = {device_type: "cisco_ios", host, port, username, password (decrypted),
+#           secret (decrypted enable), timeout, session_timeout: 60}
+
+success, output = deploy_config_sync(device, config_lines)
+if not success and _is_timeout(output) and wan_device:
+    success, output = deploy_config_sync(wan_device, config_lines)
 ```
 
 Always call `net_connect.enable()` before sending config commands. Capture full output on failure and persist to `config_history.status = "failed"`.
@@ -256,7 +264,7 @@ The backend startup calls `create_first_admin` which seeds the DB. Default crede
 
 ## Dependency Gotchas
 
-- **`bcrypt` is pinned to `3.2.2`** — `passlib 1.7.4` is incompatible with `bcrypt ≥ 4.0` because `detect_wrap_bug()` uses a >72-byte secret that newer bcrypt rejects with `ValueError`. Do not upgrade bcrypt without also replacing passlib.
+- **`bcrypt` is pinned to `3.2.2`** — `passlib 1.7.4` is incompatible with `bcrypt >= 4.0` because `detect_wrap_bug()` uses a >72-byte secret that newer bcrypt rejects with `ValueError`. Do not upgrade bcrypt without also replacing passlib.
 - **Alembic enum creation** — PostgreSQL does not support `CREATE TYPE IF NOT EXISTS`. Migration `0001` uses `op.execute(sa.text("CREATE TYPE ..."))` followed by `postgresql.ENUM(create_type=False)` in column definitions to prevent double-creation by SQLAlchemy's `before_create` event. Never use `sa.Enum` (without `create_type=False`) in a migration where you're also manually creating the type.
 - **Frontend `npm install` not `npm ci`** — there is no `package-lock.json`, so the Dockerfile uses `RUN npm install`.
 - **DB timestamps are naive UTC** — PostgreSQL columns use `TIMESTAMP WITHOUT TIME ZONE` (via `server_default=func.now()`). Always compare with `datetime.now()` (naive), never `datetime.now(timezone.utc)` (aware). Mixing them raises `asyncpg.DataError: can't subtract offset-naive and offset-aware datetimes`. This already bit `stats.py` once.
@@ -276,3 +284,4 @@ The backend startup calls `create_first_admin` which seeds the DB. Default crede
 - [x] Phase 7 — Polish (mobile responsive layout, audit log with CSV export, dashboard statistics)
 - [x] Phase 8 — Multi-credential support + pre-prod hardening (named SSH credential sets per router with global fallback; dashboard 30s auto-refresh; startup ENCRYPTION_KEY validation; deploy polling error handling; apiClient token refresh race fix)
 - [x] Phase 9 — Monitor module redesign (command presets in DB; multi-device SSH with Celery; multi-device SNMP bulk poll; compare modal with line-diff; CSV export; router selector with location/model filters)
+- [x] Phase 10 — WAN IP fallback (wan_ip_address + wan_ssh_port + use_wan_ip per router; 10s internal timeout then WAN retry for deploy + test-connection; connected_via recorded in config_history; WAN column in Inventory table; import CSV/Excel support for WAN fields; migration 0004)

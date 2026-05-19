@@ -119,6 +119,7 @@ def _update_history_results(results: list[dict]) -> None:
                     h.config_snapshot = r.get("snapshot")
                     h.status = DeployStatus(r["status"])
                     h.output = r.get("output", "")
+                    h.connected_via = r.get("connected_via")
             await db.commit()
 
     asyncio.run(_update())
@@ -161,7 +162,7 @@ def bulk_show_commands(self, router_ids: list[str], commands: list[str]) -> dict
 @celery_app.task(bind=True, max_retries=0, name="crcm.deploy_config")
 def deploy_config(self, router_id: str, rendered_config: str, history_id: str, deployed_by: str) -> dict:
     """Deploy rendered config to a single router."""
-    from app.core.ssh import build_device_dict, deploy_config_sync, run_commands_sync
+    from app.core.ssh import build_device_dict, deploy_config_sync, run_commands_sync, _is_timeout
 
     global_creds, routers_map, ssh_creds = _fetch_deploy_data([router_id])
 
@@ -178,8 +179,16 @@ def deploy_config(self, router_id: str, rendered_config: str, history_id: str, d
         return {"status": "failed", "error": "No SSH credentials configured"}
 
     device = build_device_dict(router.ip_address, creds)
+    wan_device = None
+    if router.use_wan_ip and router.wan_ip_address:
+        wan_port = router.wan_ssh_port or 22
+        wan_device = build_device_dict(router.wan_ip_address, creds, port=wan_port, timeout=30)
 
+    connected_via = "internal"
     snapshot: str | None = None
+    config_lines = [line for line in rendered_config.splitlines() if line.strip()]
+
+    # Try snapshot via internal IP
     try:
         res = run_commands_sync(device, ["show running-config"])
         raw = res.get("show running-config", "")
@@ -187,8 +196,24 @@ def deploy_config(self, router_id: str, rendered_config: str, history_id: str, d
     except Exception:
         pass
 
-    config_lines = [line for line in rendered_config.splitlines() if line.strip()]
+    # Deploy via internal IP
     success, output = deploy_config_sync(device, config_lines)
+
+    # WAN fallback on timeout
+    if not success and _is_timeout(output) and wan_device:
+        connected_via = "wan"
+        # Retry snapshot via WAN if not obtained yet
+        if snapshot is None:
+            try:
+                res2 = run_commands_sync(wan_device, ["show running-config"])
+                raw2 = res2.get("show running-config", "")
+                snapshot = raw2 if not raw2.startswith("ERROR:") else None
+            except Exception:
+                pass
+        success, output = deploy_config_sync(wan_device, config_lines)
+        wan_note = f"Connected via WAN IP ({router.wan_ip_address}:{router.wan_ssh_port or 22})\n"
+        output = wan_note + output
+
     deploy_status = "success" if success else "failed"
 
     _update_history_results([{
@@ -196,6 +221,7 @@ def deploy_config(self, router_id: str, rendered_config: str, history_id: str, d
         "status": deploy_status,
         "snapshot": snapshot,
         "output": output,
+        "connected_via": connected_via,
     }])
     return {"status": deploy_status, "history_id": history_id, "router_id": router_id}
 
@@ -276,7 +302,7 @@ def bulk_deploy_configs(self, jobs: list[dict]) -> dict:
     Deploy rendered config to multiple routers in parallel.
     jobs: list of {router_id: str, rendered_config: str, history_id: str}
     """
-    from app.core.ssh import build_device_dict, deploy_config_sync, run_commands_sync
+    from app.core.ssh import build_device_dict, deploy_config_sync, run_commands_sync, _is_timeout
 
     router_ids = [j["router_id"] for j in jobs]
     global_creds, routers_map, ssh_creds = _fetch_deploy_data(router_ids)
@@ -285,18 +311,27 @@ def bulk_deploy_configs(self, jobs: list[dict]) -> dict:
         router = routers_map.get(job["router_id"])
         if not router:
             return {"history_id": job["history_id"], "router_id": job["router_id"],
-                    "status": "failed", "output": "Router not found", "snapshot": None}
+                    "status": "failed", "output": "Router not found", "snapshot": None,
+                    "connected_via": None}
 
         creds = ssh_creds.get(router.credential_id) if router.credential_id else None
         if creds is None:
             creds = global_creds
         if creds is None:
             return {"history_id": job["history_id"], "router_id": job["router_id"],
-                    "status": "failed", "output": "No SSH credentials configured", "snapshot": None}
+                    "status": "failed", "output": "No SSH credentials configured", "snapshot": None,
+                    "connected_via": None}
 
         device = build_device_dict(router.ip_address, creds)
+        wan_device = None
+        if router.use_wan_ip and router.wan_ip_address:
+            wan_port = router.wan_ssh_port or 22
+            wan_device = build_device_dict(router.wan_ip_address, creds, port=wan_port, timeout=30)
 
+        connected_via = "internal"
         snapshot: str | None = None
+        config_lines = [line for line in job["rendered_config"].splitlines() if line.strip()]
+
         try:
             res = run_commands_sync(device, ["show running-config"])
             raw = res.get("show running-config", "")
@@ -304,8 +339,20 @@ def bulk_deploy_configs(self, jobs: list[dict]) -> dict:
         except Exception:
             pass
 
-        config_lines = [line for line in job["rendered_config"].splitlines() if line.strip()]
         success, output = deploy_config_sync(device, config_lines)
+
+        if not success and _is_timeout(output) and wan_device:
+            connected_via = "wan"
+            if snapshot is None:
+                try:
+                    res2 = run_commands_sync(wan_device, ["show running-config"])
+                    raw2 = res2.get("show running-config", "")
+                    snapshot = raw2 if not raw2.startswith("ERROR:") else None
+                except Exception:
+                    pass
+            success, output = deploy_config_sync(wan_device, config_lines)
+            wan_note = f"Connected via WAN IP ({router.wan_ip_address}:{router.wan_ssh_port or 22})\n"
+            output = wan_note + output
 
         return {
             "history_id": job["history_id"],
@@ -314,6 +361,7 @@ def bulk_deploy_configs(self, jobs: list[dict]) -> dict:
             "status": "success" if success else "failed",
             "snapshot": snapshot,
             "output": output,
+            "connected_via": connected_via,
         }
 
     results: list[dict] = []
@@ -330,6 +378,7 @@ def bulk_deploy_configs(self, jobs: list[dict]) -> dict:
                     "status": "failed",
                     "output": str(exc),
                     "snapshot": None,
+                    "connected_via": None,
                 })
 
     _update_history_results(results)
