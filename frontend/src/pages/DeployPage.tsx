@@ -282,6 +282,7 @@ function StepConfirm({
   onBack,
   onDeploy,
   deploying,
+  deployError,
 }: {
   routers: Router[]
   selectedIds: Set<string>
@@ -289,6 +290,7 @@ function StepConfirm({
   onBack: () => void
   onDeploy: () => void
   deploying: boolean
+  deployError?: string | null
 }) {
   const [showFullConfig, setShowFullConfig] = useState(false)
   const targets = routers.filter((r) => selectedIds.has(r.id))
@@ -337,6 +339,12 @@ function StepConfirm({
           </div>
         </div>
       </div>
+
+      {deployError && (
+        <div className="bg-red-900/20 border border-red-800 rounded-xl px-4 py-3 text-sm text-red-300">
+          {deployError}
+        </div>
+      )}
 
       <div className="flex justify-between pt-2">
         <button
@@ -402,7 +410,10 @@ function StepProgress({
           clearInterval(intervalRef.current!)
           setState('error')
         }
-      } catch {}
+      } catch {
+        clearInterval(intervalRef.current!)
+        setState('error')
+      }
     }, 2000)
 
     return () => clearInterval(intervalRef.current!)
@@ -513,6 +524,7 @@ export default function DeployPage() {
   const [previewing, setPreviewing] = useState(false)
   const [selectedRouterIds, setSelectedRouterIds] = useState<Set<string>>(new Set())
   const [deploying, setDeploying] = useState(false)
+  const [deployError, setDeployError] = useState<string | null>(null)
   const [jobId, setJobId] = useState('')
   const [historyIds, setHistoryIds] = useState<string[]>([])
 
@@ -561,6 +573,7 @@ export default function DeployPage() {
 
   async function handleDeploy() {
     setDeploying(true)
+    setDeployError(null)
     try {
       const res = await deploy({
         router_ids: Array.from(selectedRouterIds),
@@ -571,7 +584,7 @@ export default function DeployPage() {
       setHistoryIds(res.history_ids)
       setStep(3)
     } catch (e: any) {
-      alert(e?.response?.data?.detail ?? 'Deploy failed')
+      setDeployError(e?.response?.data?.detail ?? 'Deploy failed')
     } finally {
       setDeploying(false)
     }
@@ -584,6 +597,7 @@ export default function DeployPage() {
     setRenderedConfig('')
     setPreviewErrors([])
     setSelectedRouterIds(new Set())
+    setDeployError(null)
     setJobId('')
     setHistoryIds([])
   }
@@ -626,9 +640,10 @@ export default function DeployPage() {
             routers={routers}
             selectedIds={selectedRouterIds}
             renderedConfig={renderedConfig}
-            onBack={() => setStep(1)}
+            onBack={() => { setStep(1); setDeployError(null) }}
             onDeploy={handleDeploy}
             deploying={deploying}
+            deployError={deployError}
           />
         )}
         {step === 3 && (

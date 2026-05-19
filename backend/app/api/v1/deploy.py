@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.dependencies import get_current_user, require_operator
+from app.core.dependencies import require_operator
 from app.database import get_db
 from app.models.audit_log import AuditLog
 from app.models.config_history import ConfigHistory, DeployStatus

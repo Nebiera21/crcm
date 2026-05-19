@@ -1,6 +1,7 @@
 from functools import lru_cache
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, InvalidToken
 
 
 class Settings(BaseSettings):
@@ -25,6 +26,20 @@ class Settings(BaseSettings):
     FIRST_ADMIN_USERNAME: str = "admin"
     FIRST_ADMIN_EMAIL: str = "admin@localhost"
     FIRST_ADMIN_PASSWORD: str = "changeme"
+
+    @field_validator("ENCRYPTION_KEY")
+    @classmethod
+    def validate_encryption_key(cls, v: str) -> str:
+        if not v:
+            raise ValueError(
+                "ENCRYPTION_KEY is not set. Generate one with: "
+                "python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\""
+            )
+        try:
+            Fernet(v.encode())
+        except (ValueError, InvalidToken) as exc:
+            raise ValueError(f"ENCRYPTION_KEY is not a valid Fernet key: {exc}") from exc
+        return v
 
     def get_fernet(self) -> Fernet:
         return Fernet(self.ENCRYPTION_KEY.encode())

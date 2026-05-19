@@ -14,7 +14,7 @@ apiClient.interceptors.request.use((config) => {
   return config
 })
 
-let isRefreshing = false
+let refreshPromise: Promise<{ access_token: string; refresh_token: string }> | null = null
 
 apiClient.interceptors.response.use(
   (res) => res,
@@ -22,21 +22,25 @@ apiClient.interceptors.response.use(
     const original = error.config
     const store = useAuthStore.getState()
 
-    if (error.response?.status === 401 && !original._retry && !isRefreshing && store.refreshToken) {
+    if (error.response?.status === 401 && !original._retry && store.refreshToken) {
       original._retry = true
-      isRefreshing = true
+
+      if (!refreshPromise) {
+        refreshPromise = axios
+          .post('/api/v1/auth/refresh', { refresh_token: store.refreshToken })
+          .then((r) => r.data)
+          .finally(() => { refreshPromise = null })
+      }
+
       try {
-        const { data } = await axios.post('/api/v1/auth/refresh', {
-          refresh_token: store.refreshToken,
-        })
+        const data = await refreshPromise
         store.setTokens(data.access_token, data.refresh_token)
         original.headers.Authorization = `Bearer ${data.access_token}`
         return apiClient(original)
       } catch {
         store.logout()
         window.location.href = '/login'
-      } finally {
-        isRefreshing = false
+        return Promise.reject(error)
       }
     }
 

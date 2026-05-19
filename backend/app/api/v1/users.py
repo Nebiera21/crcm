@@ -1,9 +1,9 @@
 import uuid
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select
 from app.database import get_db
-from app.models.user import User, UserRole
+from app.models.user import User
 from app.models.audit_log import AuditLog
 from app.core.dependencies import get_current_user, require_admin
 from app.core.security import hash_password, verify_password
