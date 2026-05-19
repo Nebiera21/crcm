@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-Cisco Router Configuration Manager (CRCM) — web platform managing 70 Cisco 800-series (IOS) routers via SSH. Supports config deployment, Jinja2 templates, monitoring (show commands + SNMP), config versioning, rollback, and audit logging.
+Cisco Router Configuration Manager (CRCM) — web platform managing 70 Cisco 800-series (IOS) routers via SSH. Supports config deployment, Jinja2 templates, monitoring (show commands + SNMP), config versioning, rollback, audit logging, and continuous network monitoring (ping + SNMP traffic).
 
 ---
 
@@ -49,10 +49,11 @@ npm run lint       # ESLint
 npm run type-check # tsc --noEmit
 ```
 
-### Celery worker
+### Celery worker + beat
 ```bash
 # From backend/
 celery -A app.tasks.celery_tasks worker --loglevel=info --concurrency=10
+celery -A app.tasks.celery_tasks beat --loglevel=info   # separate process for scheduled tasks
 ```
 
 ---
@@ -73,10 +74,17 @@ FastAPI routes are `async`. Netmiko (synchronous) runs either:
 - In a thread pool via `asyncio.get_event_loop().run_in_executor()` — for single-router operations (test connection, show commands)
 - In Celery worker threads via `ThreadPoolExecutor(max_workers=10)` — for bulk operations
 
-Do not call Netmiko directly from FastAPI coroutines. Same rule applies to `snmp_poll_sync`.
+Do not call Netmiko directly from FastAPI coroutines. Same rule applies to `snmp_poll_sync`, `snmp_traffic_sync`, and `ping_host_sync`.
 
 ### Celery DB access
 Celery workers use `asyncio.run()` to run async SQLAlchemy queries inside sync task functions (workers have no running event loop). See `tasks/celery_tasks.py::_fetch_deploy_data`.
+
+### Celery Beat — scheduled monitoring
+`tasks/celery_tasks.py` defines `beat_schedule` with two recurring tasks:
+- `crcm.poll_all_monitoring` — every 30 seconds: pings all active routers (LAN + WAN) and polls SNMP traffic counters
+- `crcm.cleanup_monitoring_data` — every hour: deletes rows older than `monitoring_settings.retention_days`
+
+Beat tasks are implemented in `tasks/monitoring_tasks.py`, which is imported at the bottom of `celery_tasks.py` to register the tasks. This is a controlled circular import: `celery_app` and `_celery_session` are defined before the import so Python can resolve them. A separate `celery-beat` Docker service runs the scheduler; the `celery` worker service handles execution.
 
 ### Auth
 JWT tokens via `python-jose`. Three roles: `admin`, `operator`, `readonly`. Role is embedded in the JWT claim and checked per-endpoint with a FastAPI dependency. See permissions table below.
@@ -87,11 +95,24 @@ Show commands are stored in `command_presets` (DB table, not hardcoded). Migrati
 ### Monitor — single vs bulk SSH routing
 `POST /monitor/commands` (single router, all roles) runs synchronously via `run_in_executor`. `POST /monitor/commands/bulk` (operator+) dispatches a Celery task and returns a `job_id` for polling. The frontend picks the path based on how many routers are selected: 1 → direct, 2+ → Celery. Both paths normalize to the same `RouterRunResult[]` shape on the frontend.
 
-### SNMP polling
+### SNMP polling (Monitor page — on-demand)
 `core/snmp.py` wraps pysnmp SNMPv2c GET calls in a synchronous function (`snmp_poll_sync`) with a 5-second timeout. Async shim via `run_in_executor`. OIDs polled: sysDescr, sysUpTime, sysName, Cisco avgBusy5 (CPU), Cisco freeMem, ifNumber. Requires `snmp_community` on the router row. Bulk SNMP (`POST /monitor/snmp/bulk`) uses the `bulk_snmp_poll` Celery task — routers without `snmp_community` return an error row rather than failing the whole job.
 
+### Network Monitor — continuous ping + traffic (Phase 11)
+Separate from the on-demand Monitor page. Celery Beat polls every 30s automatically.
+
+**Ping** (`core/ping.py`): subprocess `/bin/ping` (iputils-ping installed in Dockerfile). Results stored in `ping_results` table (router_id, target=lan/wan, latency_ms, packet_loss, is_up).
+
+**SNMP Traffic** (`core/snmp.py::snmp_traffic_sync`): walks `ifDescr` table to resolve `router.wan_interface` name → ifIndex, then polls `ifHCInOctets`/`ifHCOutOctets` (64-bit) with fallback to 32-bit `ifInOctets`/`ifOutOctets`. Raw byte counters stored per poll; **rate computation** (bits/sec) is done in the Celery task by comparing current vs previous counters stored in Redis with key `nm:traffic:prev:{router_id}` (TTL 120s). Only intervals between 5–120 seconds are accepted to avoid bad rates after restarts. Results stored in `snmp_traffic_metrics`.
+
+**Rate counter wrap**: difference is allowed to go negative (32-bit wrap); corrected by adding `2**32`. HC (64-bit) counters effectively never wrap.
+
+**Settings** (`monitoring_settings` table, always id=1): `retention_days` (1–90, default 7), `ping_enabled`, `snmp_traffic_enabled`. Admin-only write via `PUT /network-monitor/settings`.
+
+**Frontend** (`/network-monitor`): 30s auto-refresh with countdown. Three tabs — Overview (card grid), Traffic (aggregate area chart + per-router expandable rows), Ping (table + expandable latency history). Uses Recharts (`recharts` v3).
+
 ### WAN IP fallback
-Each router has three optional fields: `wan_ip_address`, `wan_ssh_port` (default 22), `use_wan_ip` (bool). When `use_wan_ip=True` and the internal SSH attempt times out (10s), the deploy task and test-connection endpoint automatically retry via the WAN IP with `timeout=30`. On WAN success, `config_history.connected_via` is set to `"wan"` and output is prefixed with `"Connected via WAN IP (x.x.x.x:port)\n"`. Monitor SSH commands and SNMP do **not** use WAN fallback. Migration `0004` adds the four new columns (`wan_ip_address`, `wan_ssh_port`, `use_wan_ip` on `routers`; `connected_via` on `config_history`). Import (Excel/CSV) supports these three columns. `_is_timeout(text)` in `core/ssh.py` detects timeout failures using `_TIMEOUT_MARKER`; use it before branching to WAN.
+Each router has: `wan_ip_address`, `wan_ssh_port` (default 22), `use_wan_ip` (bool), `wan_interface` (string, default `FastEthernet4`). When `use_wan_ip=True` and the internal SSH attempt times out (10s), the deploy task and test-connection endpoint automatically retry via the WAN IP with `timeout=30`. On WAN success, `config_history.connected_via` is set to `"wan"` and output is prefixed with `"Connected via WAN IP (x.x.x.x:port)\n"`. Monitor SSH commands and SNMP do **not** use WAN fallback. Migration `0004` adds the four new columns (`wan_ip_address`, `wan_ssh_port`, `use_wan_ip` on `routers`; `connected_via` on `config_history`). Migration `0005` adds `wan_interface`. Import (Excel/CSV) supports WAN fields.
 
 ### Audit logging
 Every mutating action writes to `audit_logs` via `db.add(AuditLog(...))`. Pattern: `action = "<resource>.<verb>"` (e.g. `user.create`, `deploy.rollback`). The `detail` JSONB column stores relevant context. All roles can view and export audit logs via `GET /api/v1/audit/`.
@@ -101,13 +122,13 @@ Every mutating action writes to `audit_logs` via `db.add(AuditLog(...))`. Patter
 ## Key Conventions
 
 - All API routes: `/api/v1/`
-- All timestamps: UTC
-- All PKs: UUID (except `global_credentials.id` which is INT, always 1 row)
+- All timestamps: UTC (naive — see Dependency Gotchas)
+- All PKs: UUID (except `global_credentials.id` and `monitoring_settings.id` which are INT, always 1 row)
 - bcrypt cost factor 12 for user passwords
-- Celery max concurrency: 10 (SSH connection limit)
+- Celery max concurrency: 10 (SSH connection limit); monitoring task uses up to 20 threads (ping is lightweight)
 - Destructive actions (deploy, rollback, delete router) require an explicit confirmation step in the UI before the API call is made
-- Frontend: Zustand for state, Axios for HTTP, Tailwind dark theme, toast notifications for all async ops
-- Static API paths (`/stats`, `/import`, `/export`, `/test-connection`, `/preview`) **must be registered before** `/{id}` path-param routes to avoid UUID parse conflicts
+- Frontend: Zustand for state, Axios for HTTP, Tailwind dark theme, toast notifications for all async ops, Recharts for graphs
+- **Static API paths must be registered before `/{id}` path-param routes** — FastAPI matches in registration order; a UUID-typed path param returns 422 (not 404) when given a non-UUID string, preventing fallthrough. Applies to `/stats`, `/import`, `/export`, `/test-connection`, `/preview`, and **`/traffic/aggregate`** (must come before `/traffic/{router_id}`)
 - Mobile layout: sidebar hidden on `< md`, replaced by hamburger + slide-out drawer; `useEffect` on `location.pathname` closes drawer on navigate
 
 ---
@@ -129,6 +150,8 @@ Every mutating action writes to `audit_logs` via `db.add(AuditLog(...))`. Patter
 | Edit global credentials | ✅ | ❌ | ❌ |
 | SNMP poll (single + bulk) | ✅ | ✅ | ✅ |
 | Add/delete command presets | ✅ | ❌ | ❌ |
+| View Network Monitor | ✅ | ✅ | ✅ |
+| Edit Network Monitor settings | ✅ | ❌ | ❌ |
 
 ---
 
@@ -205,9 +228,17 @@ DELETE /api/v1/monitor/presets/{id}
 POST   /api/v1/monitor/commands
 POST   /api/v1/monitor/commands/bulk
 
-# Monitor — SNMP
+# Monitor — SNMP (on-demand)
 POST   /api/v1/monitor/snmp/poll
 POST   /api/v1/monitor/snmp/bulk
+
+# Network Monitor — continuous monitoring (ping + traffic)
+GET    /api/v1/network-monitor/settings
+PUT    /api/v1/network-monitor/settings          (admin)
+GET    /api/v1/network-monitor/status            (latest ping + traffic for all routers)
+GET    /api/v1/network-monitor/ping/{router_id}  ?hours=1|6|24
+GET    /api/v1/network-monitor/traffic/aggregate ?hours=1|6|24  ← must be before /{router_id}
+GET    /api/v1/network-monitor/traffic/{router_id} ?hours=1|6|24
 
 # Tasks
 GET    /api/v1/tasks/{job_id}
@@ -245,7 +276,7 @@ Copy `.env.example` to `.env`. Required values that must be generated:
 - `SECRET_KEY` — 32-char random string (JWT signing)
 - `ENCRYPTION_KEY` — valid Fernet key: `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`
 
-Docker Compose services: `postgres` (5432), `redis` (6379), `backend` (8000), `celery` (worker), `frontend` (3000 via nginx).
+Docker Compose services: `postgres` (5432), `redis` (6379), `backend` (8000), `celery` (worker), `celery-beat` (scheduler), `frontend` (3000 via nginx).
 
 ---
 
@@ -255,7 +286,7 @@ After `docker compose up -d`, run migrations before the backend will start succe
 
 ```bash
 docker compose exec backend alembic upgrade head
-docker compose restart backend celery
+docker compose restart backend celery celery-beat
 ```
 
 The backend startup calls `create_first_admin` which seeds the DB. Default credentials come from `.env` (`FIRST_ADMIN_USERNAME`, `FIRST_ADMIN_PASSWORD`).
@@ -270,8 +301,8 @@ When you change backend Python code or add a migration, and the app runs in Dock
 # 1. Run new migrations (never skip this after model changes)
 docker compose exec backend alembic upgrade head
 
-# 2. Restart backend + celery to pick up code changes
-docker compose restart backend celery
+# 2. Restart backend + workers to pick up code changes
+docker compose restart backend celery celery-beat
 ```
 
 When you change frontend code (React/TypeScript), the nginx container serves a compiled build — you must rebuild the image:
@@ -291,10 +322,13 @@ Then do a **hard refresh** in the browser (`Cmd+Shift+R`) to clear the cached JS
 
 - **`bcrypt` is pinned to `3.2.2`** — `passlib 1.7.4` is incompatible with `bcrypt >= 4.0` because `detect_wrap_bug()` uses a >72-byte secret that newer bcrypt rejects with `ValueError`. Do not upgrade bcrypt without also replacing passlib.
 - **Alembic enum creation** — PostgreSQL does not support `CREATE TYPE IF NOT EXISTS`. Migration `0001` uses `op.execute(sa.text("CREATE TYPE ..."))` followed by `postgresql.ENUM(create_type=False)` in column definitions to prevent double-creation by SQLAlchemy's `before_create` event. Never use `sa.Enum` (without `create_type=False`) in a migration where you're also manually creating the type.
-- **Frontend `npm install` not `npm ci`** — there is no `package-lock.json`, so the Dockerfile uses `RUN npm install`.
+- **Frontend has `package-lock.json`** — committed since Phase 11. The frontend Dockerfile still uses `RUN npm install` (not `npm ci`) because it was written before the lockfile existed; consider switching to `npm ci` for reproducible builds.
 - **DB timestamps are naive UTC** — PostgreSQL columns use `TIMESTAMP WITHOUT TIME ZONE` (via `server_default=func.now()`). Always compare with `datetime.now()` (naive), never `datetime.now(timezone.utc)` (aware). Mixing them raises `asyncpg.DataError: can't subtract offset-naive and offset-aware datetimes`. This already bit `stats.py` once.
 - **`get_db()` auto-commits** — The `get_db()` dependency in `database.py` calls `await session.commit()` on successful yield exit. Do **not** add explicit `await db.commit()` calls inside route handlers — it is redundant. Do add it inside Celery tasks (which use `_celery_session()`, not `get_db()`).
 - **ENCRYPTION_KEY is validated at startup** — `config.py` runs `Fernet(key.encode())` via a `field_validator` on load. If the key is missing or invalid, the app refuses to start with a clear error message. Always set `ENCRYPTION_KEY` in `.env` before first run.
+- **`iputils-ping` required in backend image** — `core/ping.py` uses subprocess `/bin/ping`. The backend Dockerfile installs `iputils-ping` via apt. If it's missing, ping monitoring silently returns `error: ping binary not found`.
+- **SNMP traffic first reading has no rate** — On first poll after restart, `bits_in_per_sec` and `bits_out_per_sec` will be `null` because there's no previous counter in Redis. The second poll (30s later) produces the first rate value. The frontend shows `—` for null rates.
+- **Celery Beat vs Worker are separate services** — Beat only schedules; the Worker executes. Both must be running for monitoring to work. If only Worker runs, scheduled tasks never fire. `docker compose restart celery celery-beat` is the correct restart command.
 
 ---
 
@@ -310,3 +344,4 @@ Then do a **hard refresh** in the browser (`Cmd+Shift+R`) to clear the cached JS
 - [x] Phase 8 — Multi-credential support + pre-prod hardening (named SSH credential sets per router with global fallback; dashboard 30s auto-refresh; startup ENCRYPTION_KEY validation; deploy polling error handling; apiClient token refresh race fix)
 - [x] Phase 9 — Monitor module redesign (command presets in DB; multi-device SSH with Celery; multi-device SNMP bulk poll; compare modal with line-diff; CSV export; router selector with location/model filters)
 - [x] Phase 10 — WAN IP fallback (wan_ip_address + wan_ssh_port + use_wan_ip per router; 10s internal timeout then WAN retry for deploy + test-connection; connected_via recorded in config_history; WAN column in Inventory table; import CSV/Excel support for WAN fields; migration 0004)
+- [x] Phase 11 — Network Monitor page (continuous ping + SNMP traffic; Celery Beat 30s scheduler; ping_results + snmp_traffic_metrics tables; ifHC 64-bit counters with Redis rate calculation; wan_interface per router; Recharts area/line charts; Overview/Traffic/Ping tabs; admin retention settings; migration 0005)

@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func, select, text
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import get_current_user, require_admin
@@ -24,8 +24,6 @@ from app.schemas.network_monitor import (
 )
 
 router = APIRouter()
-
-_VALID_HOURS = {1, 6, 24}
 
 
 async def _get_or_create_settings(db: AsyncSession) -> MonitoringSettings:
@@ -173,33 +171,7 @@ async def get_ping_history(
     ]
 
 
-# ── Traffic history (single router) ──────────────────────────────────────────
-
-@router.get("/traffic/{router_id}", response_model=list[TrafficPoint])
-async def get_traffic_history(
-    router_id: uuid.UUID,
-    hours: int = Query(1, ge=1, le=24),
-    _: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-) -> list[TrafficPoint]:
-    since = datetime.now() - timedelta(hours=hours)
-    rows = (await db.execute(
-        select(SnmpTrafficMetric)
-        .where(SnmpTrafficMetric.router_id == router_id, SnmpTrafficMetric.timestamp >= since)
-        .order_by(SnmpTrafficMetric.timestamp)
-    )).scalars().all()
-    return [
-        TrafficPoint(
-            timestamp=r.timestamp,
-            bits_in_per_sec=r.bits_in_per_sec,
-            bits_out_per_sec=r.bits_out_per_sec,
-            if_status=r.if_status,
-        )
-        for r in rows
-    ]
-
-
-# ── Aggregate traffic (all routers summed per minute) ────────────────────────
+# ── Aggregate traffic — must be before /{router_id} to avoid UUID parse conflict
 
 @router.get("/traffic/aggregate", response_model=list[AggregatePoint])
 async def get_aggregate_traffic(
@@ -232,4 +204,30 @@ async def get_aggregate_traffic(
             router_count=int(row["router_count"] or 0),
         )
         for row in rows
+    ]
+
+
+# ── Traffic history (single router) ──────────────────────────────────────────
+
+@router.get("/traffic/{router_id}", response_model=list[TrafficPoint])
+async def get_traffic_history(
+    router_id: uuid.UUID,
+    hours: int = Query(1, ge=1, le=24),
+    _: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[TrafficPoint]:
+    since = datetime.now() - timedelta(hours=hours)
+    rows = (await db.execute(
+        select(SnmpTrafficMetric)
+        .where(SnmpTrafficMetric.router_id == router_id, SnmpTrafficMetric.timestamp >= since)
+        .order_by(SnmpTrafficMetric.timestamp)
+    )).scalars().all()
+    return [
+        TrafficPoint(
+            timestamp=r.timestamp,
+            bits_in_per_sec=r.bits_in_per_sec,
+            bits_out_per_sec=r.bits_out_per_sec,
+            if_status=r.if_status,
+        )
+        for r in rows
     ]

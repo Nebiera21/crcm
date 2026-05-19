@@ -40,7 +40,6 @@ def _fetch_monitoring_data() -> tuple:
 
 
 def _save_ping_results(results: list[dict]) -> None:
-    from sqlalchemy import text
     from app.models.ping_result import PingResult
 
     SessionLocal = _celery_session()
