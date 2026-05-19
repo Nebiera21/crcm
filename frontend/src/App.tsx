@@ -10,6 +10,7 @@ import InventoryPage from '@/pages/InventoryPage'
 import LoginPage from '@/pages/LoginPage'
 import MonitorPage from '@/pages/MonitorPage'
 import TemplatesPage from '@/pages/TemplatesPage'
+import UsersPage from '@/pages/UsersPage'
 
 export default function App() {
   return (
@@ -27,6 +28,7 @@ export default function App() {
             <Route path="/deploy" element={<DeployPage />} />
             <Route path="/history" element={<HistoryPage />} />
             <Route path="/audit" element={<AuditLogPage />} />
+            <Route path="/users" element={<UsersPage />} />
             <Route path="/" element={<Navigate to="/dashboard" replace />} />
           </Route>
         </Route>
