@@ -200,6 +200,76 @@ def deploy_config(self, router_id: str, rendered_config: str, history_id: str, d
     return {"status": deploy_status, "history_id": history_id, "router_id": router_id}
 
 
+@celery_app.task(bind=True, max_retries=0, name="crcm.bulk_snmp_poll")
+def bulk_snmp_poll(self, router_ids: list[str]) -> dict:
+    """Poll SNMP metrics for multiple routers in parallel."""
+    import uuid as _uuid
+    from datetime import datetime, timezone
+    from sqlalchemy import select
+    from app.models.router import Router
+    from app.core.snmp import snmp_poll_sync
+
+    SessionLocal = _celery_session()
+
+    async def _fetch():
+        async with SessionLocal() as db:
+            routers = []
+            for rid in router_ids:
+                r = (await db.execute(
+                    select(Router).where(Router.id == _uuid.UUID(rid))
+                )).scalar_one_or_none()
+                if r:
+                    routers.append(r)
+            return routers
+
+    routers = asyncio.run(_fetch())
+    if not routers:
+        return {"results": {}}
+
+    def _poll(r) -> tuple[str, dict]:
+        polled_at = datetime.now(timezone.utc).isoformat()
+        if not r.snmp_community:
+            return str(r.id), {
+                "hostname": r.hostname,
+                "ip_address": r.ip_address,
+                "reachable": False,
+                "sys_descr": None,
+                "sys_name": None,
+                "uptime_seconds": None,
+                "cpu_5min_percent": None,
+                "mem_free_bytes": None,
+                "if_number": None,
+                "error": "No SNMP community configured",
+                "polled_at": polled_at,
+            }
+        metrics = snmp_poll_sync(r.ip_address, r.snmp_community)
+        return str(r.id), {
+            "hostname": r.hostname,
+            "ip_address": r.ip_address,
+            "polled_at": polled_at,
+            **metrics,
+        }
+
+    results: dict = {}
+    with ThreadPoolExecutor(max_workers=min(10, len(routers))) as pool:
+        futures = {pool.submit(_poll, r): r for r in routers}
+        for future in as_completed(futures):
+            r = futures[future]
+            try:
+                rid, data = future.result()
+                results[rid] = data
+            except Exception as exc:
+                results[str(r.id)] = {
+                    "hostname": r.hostname,
+                    "ip_address": r.ip_address,
+                    "reachable": False,
+                    "error": str(exc),
+                    "polled_at": datetime.now(timezone.utc).isoformat(),
+                }
+
+    return {"results": results}
+
+
 @celery_app.task(bind=True, max_retries=0, name="crcm.bulk_deploy_configs")
 def bulk_deploy_configs(self, jobs: list[dict]) -> dict:
     """

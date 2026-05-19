@@ -27,6 +27,10 @@ class BulkCommandRequest(BaseModel):
     commands: list[str]
 
 
+class BulkSNMPRequest(BaseModel):
+    router_ids: list[uuid.UUID]
+
+
 class TaskStatus(BaseModel):
     job_id: str
     state: str
