@@ -82,6 +82,7 @@ def test_connection_sync(device: dict) -> tuple[bool, str, int | None]:
 def run_commands_sync(device: dict, commands: list[str]) -> dict[str, str]:
     """Returns mapping of command → output (or error string)."""
     results: dict[str, str] = {}
+    conn = None
     try:
         conn = ConnectHandler(**device)
         conn.enable()
@@ -90,7 +91,6 @@ def run_commands_sync(device: dict, commands: list[str]) -> dict[str, str]:
                 results[cmd] = conn.send_command(cmd, read_timeout=60)
             except Exception as exc:
                 results[cmd] = f"ERROR: {exc}"
-        conn.disconnect()
     except NetmikoTimeoutException:
         for cmd in commands:
             results.setdefault(cmd, "ERROR: Connection timed out")
@@ -100,6 +100,9 @@ def run_commands_sync(device: dict, commands: list[str]) -> dict[str, str]:
     except Exception as exc:
         for cmd in commands:
             results.setdefault(cmd, f"ERROR: {exc}")
+    finally:
+        if conn:
+            conn.disconnect()
     return results
 
 
@@ -117,12 +120,12 @@ async def run_commands(device: dict, commands: list[str]) -> dict[str, str]:
 
 def deploy_config_sync(device: dict, config_lines: list[str]) -> tuple[bool, str]:
     """Push config lines to a Cisco IOS device. Returns (success, full_output)."""
+    conn = None
     try:
         conn = ConnectHandler(**device)
         conn.enable()
         output = conn.send_config_set(config_lines)
         conn.save_config()
-        conn.disconnect()
         return True, output
     except NetmikoTimeoutException:
         return False, f"{_TIMEOUT_MARKER} ({device.get('timeout', 10)}s)"
@@ -130,6 +133,9 @@ def deploy_config_sync(device: dict, config_lines: list[str]) -> tuple[bool, str
         return False, "Authentication failed — check username/password"
     except Exception as exc:
         return False, f"Deploy error: {exc}"
+    finally:
+        if conn:
+            conn.disconnect()
 
 
 def _is_timeout(text: str) -> bool:
