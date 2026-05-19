@@ -245,6 +245,9 @@ The backend startup calls `create_first_admin` which seeds the DB. Default crede
 - **`bcrypt` is pinned to `3.2.2`** — `passlib 1.7.4` is incompatible with `bcrypt ≥ 4.0` because `detect_wrap_bug()` uses a >72-byte secret that newer bcrypt rejects with `ValueError`. Do not upgrade bcrypt without also replacing passlib.
 - **Alembic enum creation** — PostgreSQL does not support `CREATE TYPE IF NOT EXISTS`. Migration `0001` uses `op.execute(sa.text("CREATE TYPE ..."))` followed by `postgresql.ENUM(create_type=False)` in column definitions to prevent double-creation by SQLAlchemy's `before_create` event. Never use `sa.Enum` (without `create_type=False`) in a migration where you're also manually creating the type.
 - **Frontend `npm install` not `npm ci`** — there is no `package-lock.json`, so the Dockerfile uses `RUN npm install`.
+- **DB timestamps are naive UTC** — PostgreSQL columns use `TIMESTAMP WITHOUT TIME ZONE` (via `server_default=func.now()`). Always compare with `datetime.now()` (naive), never `datetime.now(timezone.utc)` (aware). Mixing them raises `asyncpg.DataError: can't subtract offset-naive and offset-aware datetimes`. This already bit `stats.py` once.
+- **`get_db()` auto-commits** — The `get_db()` dependency in `database.py` calls `await session.commit()` on successful yield exit. Do **not** add explicit `await db.commit()` calls inside route handlers — it is redundant. Do add it inside Celery tasks (which use `_celery_session()`, not `get_db()`).
+- **ENCRYPTION_KEY is validated at startup** — `config.py` runs `Fernet(key.encode())` via a `field_validator` on load. If the key is missing or invalid, the app refuses to start with a clear error message. Always set `ENCRYPTION_KEY` in `.env` before first run.
 
 ---
 
@@ -257,3 +260,4 @@ The backend startup calls `create_first_admin` which seeds the DB. Default crede
 - [x] Phase 5 — Deploy & History (Config deployment single+bulk, snapshots, rollback, history UI)
 - [x] Phase 6 — Monitoring & SNMP (SNMP poller, dashboard enhancements)
 - [x] Phase 7 — Polish (mobile responsive layout, audit log with CSV export, dashboard statistics)
+- [x] Phase 8 — Multi-credential support + pre-prod hardening (named SSH credential sets per router with global fallback; dashboard 30s auto-refresh; startup ENCRYPTION_KEY validation; deploy polling error handling; apiClient token refresh race fix)
