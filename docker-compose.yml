@@ -47,6 +47,18 @@ services:
       - ./backend:/app
     command: celery -A app.tasks.celery_tasks worker --loglevel=info --concurrency=10
 
+  celery-beat:
+    build: ./backend
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+    command: celery -A app.tasks.celery_tasks beat --loglevel=info
+
   frontend:
     build: ./frontend
     ports:

@@ -5,6 +5,14 @@ All numeric OIDs — no MIB resolution required.
 import asyncio
 import functools
 
+# Interface traffic OIDs (IF-MIB / IF-MIB HC counters)
+OID_IF_DESCR_TABLE = "1.3.6.1.2.1.2.2.1.2"        # ifDescr — walk to find index
+OID_IF_OPER_STATUS_TABLE = "1.3.6.1.2.1.2.2.1.8"  # ifOperStatus (1=up, 2=down)
+OID_IF_IN_OCTETS_TABLE = "1.3.6.1.2.1.2.2.1.10"   # ifInOctets (32-bit)
+OID_IF_OUT_OCTETS_TABLE = "1.3.6.1.2.1.2.2.1.16"  # ifOutOctets (32-bit)
+OID_IF_HC_IN_TABLE = "1.3.6.1.2.1.31.1.1.1.6"     # ifHCInOctets (64-bit, preferred)
+OID_IF_HC_OUT_TABLE = "1.3.6.1.2.1.31.1.1.1.10"   # ifHCOutOctets (64-bit)
+
 # Standard MIB-2 OIDs
 OID_SYS_DESCR = "1.3.6.1.2.1.1.1.0"
 OID_SYS_UPTIME = "1.3.6.1.2.1.1.3.0"
@@ -124,3 +132,111 @@ async def snmp_poll(host: str, community: str, port: int = 161) -> dict:
     """Async wrapper — runs snmp_poll_sync in thread pool."""
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(None, functools.partial(snmp_poll_sync, host, community, port))
+
+
+def snmp_traffic_sync(host: str, community: str, interface_name: str, port: int = 161) -> dict:
+    """
+    Poll WAN interface traffic counters via SNMPv2c.
+    Returns {reachable, if_index, if_status, bytes_in, bytes_out, error}.
+    bytes_in/bytes_out are raw octet counters — caller computes rate by comparing with previous reading.
+    Never raises.
+    """
+    result: dict = {
+        "reachable": False,
+        "if_index": None,
+        "if_status": None,
+        "bytes_in": None,
+        "bytes_out": None,
+        "error": None,
+    }
+
+    try:
+        from pysnmp.hlapi import (
+            CommunityData,
+            ContextData,
+            ObjectIdentity,
+            ObjectType,
+            SnmpEngine,
+            UdpTransportTarget,
+            getCmd,
+            nextCmd,
+        )
+    except ImportError as exc:
+        result["error"] = f"pysnmp not available: {exc}"
+        return result
+
+    try:
+        engine = SnmpEngine()
+        auth = CommunityData(community, mpModel=1)
+        transport = UdpTransportTarget((host, port), timeout=5, retries=1)
+
+        # Walk ifDescr table to find ifIndex for the given interface name
+        if_index: int | None = None
+        for errorIndication, errorStatus, _, varBinds in nextCmd(
+            engine, auth, transport, ContextData(),
+            ObjectType(ObjectIdentity(OID_IF_DESCR_TABLE)),
+            lexicographicMode=False,
+        ):
+            if errorIndication or errorStatus:
+                break
+            for varBind in varBinds:
+                oid_str = str(varBind[0])
+                desc = str(varBind[1]).strip()
+                if desc == interface_name.strip():
+                    try:
+                        if_index = int(oid_str.split(".")[-1])
+                    except (ValueError, IndexError):
+                        pass
+                    break
+            if if_index is not None:
+                break
+
+        if if_index is None:
+            result["error"] = f"Interface {interface_name!r} not found via SNMP"
+            return result
+
+        result["if_index"] = if_index
+        result["reachable"] = True
+
+        def _get(oid: str) -> int | None:
+            try:
+                for errInd, errStat, _, vbs in getCmd(
+                    engine, auth, transport, ContextData(),
+                    ObjectType(ObjectIdentity(oid)),
+                ):
+                    if not errInd and not errStat:
+                        for vb in vbs:
+                            return int(vb[1])
+                    break
+            except Exception:
+                pass
+            return None
+
+        # ifOperStatus
+        status_val = _get(f"{OID_IF_OPER_STATUS_TABLE}.{if_index}")
+        if status_val is not None:
+            result["if_status"] = "up" if status_val == 1 else "down"
+
+        # Try 64-bit HC counters first, fall back to 32-bit
+        bytes_in = _get(f"{OID_IF_HC_IN_TABLE}.{if_index}")
+        bytes_out = _get(f"{OID_IF_HC_OUT_TABLE}.{if_index}")
+
+        if bytes_in is None:
+            bytes_in = _get(f"{OID_IF_IN_OCTETS_TABLE}.{if_index}")
+        if bytes_out is None:
+            bytes_out = _get(f"{OID_IF_OUT_OCTETS_TABLE}.{if_index}")
+
+        result["bytes_in"] = bytes_in
+        result["bytes_out"] = bytes_out
+
+    except Exception as exc:
+        result["error"] = str(exc)
+
+    return result
+
+
+async def snmp_traffic(host: str, community: str, interface_name: str, port: int = 161) -> dict:
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        None, functools.partial(snmp_traffic_sync, host, community, interface_name, port)
+    )

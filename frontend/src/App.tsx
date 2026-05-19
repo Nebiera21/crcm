@@ -9,6 +9,7 @@ import HistoryPage from '@/pages/HistoryPage'
 import InventoryPage from '@/pages/InventoryPage'
 import LoginPage from '@/pages/LoginPage'
 import MonitorPage from '@/pages/MonitorPage'
+import NetworkMonitorPage from '@/pages/NetworkMonitorPage'
 import TemplatesPage from '@/pages/TemplatesPage'
 import UsersPage from '@/pages/UsersPage'
 
@@ -23,6 +24,7 @@ export default function App() {
             <Route path="/dashboard" element={<DashboardPage />} />
             <Route path="/inventory" element={<InventoryPage />} />
             <Route path="/monitor" element={<MonitorPage />} />
+            <Route path="/network-monitor" element={<NetworkMonitorPage />} />
             <Route path="/credentials" element={<CredentialsPage />} />
             <Route path="/templates" element={<TemplatesPage />} />
             <Route path="/deploy" element={<DeployPage />} />

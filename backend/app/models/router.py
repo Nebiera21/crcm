@@ -26,5 +26,6 @@ class Router(Base):
     wan_ip_address: Mapped[str | None] = mapped_column(String(45), nullable=True)
     wan_ssh_port: Mapped[int | None] = mapped_column(Integer, nullable=True)
     use_wan_ip: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    wan_interface: Mapped[str | None] = mapped_column(String(64), nullable=True, default="FastEthernet4")
     created_at: Mapped[datetime] = mapped_column(nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(nullable=False, server_default=func.now(), onupdate=func.now())

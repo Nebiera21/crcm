@@ -24,6 +24,7 @@ class RouterCreate(BaseModel):
     wan_ip_address: str | None = None
     wan_ssh_port: int | None = None
     use_wan_ip: bool = False
+    wan_interface: str | None = "FastEthernet4"
 
     @field_validator("hostname")
     @classmethod
@@ -58,6 +59,7 @@ class RouterUpdate(BaseModel):
     wan_ip_address: str | None = None
     wan_ssh_port: int | None = None
     use_wan_ip: bool | None = None
+    wan_interface: str | None = None
 
     @field_validator("ip_address", mode="before")
     @classmethod
@@ -89,6 +91,7 @@ class RouterResponse(BaseModel):
     wan_ip_address: str | None
     wan_ssh_port: int | None
     use_wan_ip: bool
+    wan_interface: str | None
     created_at: datetime
     updated_at: datetime
 

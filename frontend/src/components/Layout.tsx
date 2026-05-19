@@ -9,6 +9,7 @@ import {
   LayoutDashboard,
   LogOut,
   Menu,
+  Network,
   Router,
   Send,
   Server,
@@ -31,6 +32,7 @@ const NAV_ITEMS: NavItem[] = [
   { label: 'Templates', to: '/templates', icon: FileCode2 },
   { label: 'Deploy', to: '/deploy', icon: Send },
   { label: 'Monitor', to: '/monitor', icon: Activity },
+  { label: 'Net Monitor', to: '/network-monitor', icon: Network },
   { label: 'History', to: '/history', icon: History },
   { label: 'Audit Log', to: '/audit', icon: ClipboardList },
 ]

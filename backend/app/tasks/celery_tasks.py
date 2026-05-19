@@ -17,7 +17,22 @@ celery_app.conf.update(
     result_expires=86400,
     worker_max_tasks_per_child=50,
     task_acks_late=True,
+    timezone="UTC",
+    enable_utc=True,
+    beat_schedule={
+        "poll-monitoring-30s": {
+            "task": "crcm.poll_all_monitoring",
+            "schedule": 30.0,
+        },
+        "cleanup-monitoring-1h": {
+            "task": "crcm.cleanup_monitoring_data",
+            "schedule": 3600.0,
+        },
+    },
 )
+
+# Register monitoring tasks so Beat can discover them
+import app.tasks.monitoring_tasks  # noqa: F401, E402
 
 
 def _celery_session():
