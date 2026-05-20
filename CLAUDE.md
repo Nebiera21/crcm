@@ -113,6 +113,8 @@ Separate from the on-demand Monitor page. Celery Beat polls every 30s automatica
 
 **Frontend** (`/network-monitor`): 30s auto-refresh with countdown. Three tabs — Overview (card grid), Traffic (aggregate area chart + per-router expandable rows), Ping (table + expandable latency history). Uses Recharts (`recharts` v3).
 
+**Aggregate traffic filter**: The Traffic tab filter bar lets users scope the aggregate chart to: all routers (default), a specific location, or a custom selection of individual routers. The `AggregateChart` component passes `router_ids` as repeated query params (`URLSearchParams.append()`). The backend `GET /traffic/aggregate` endpoint accepts the optional `router_ids: list[uuid.UUID]` query param and applies `AND router_id = ANY(:ids)` when provided. Filter state lives in the page component: `aggFilter` (string: `'all'` | location name | `'custom'`), `customRouterIds` (Set<string>), `effectiveRouterIds` (computed — undefined → all, ID array → filtered).
+
 ### WAN IP fallback
 Each router has: `wan_ip_address`, `wan_ssh_port` (default 22), `use_wan_ip` (bool), `wan_interface` (string, default `FastEthernet4`). When `use_wan_ip=True` and the internal SSH attempt times out (10s), the deploy task and test-connection endpoint automatically retry via the WAN IP with `timeout=30`. On WAN success, `config_history.connected_via` is set to `"wan"` and output is prefixed with `"Connected via WAN IP (x.x.x.x:port)\n"`. Monitor SSH commands and SNMP do **not** use WAN fallback. Migration `0004` adds the four new columns (`wan_ip_address`, `wan_ssh_port`, `use_wan_ip` on `routers`; `connected_via` on `config_history`). Migration `0005` adds `wan_interface`. Import (Excel/CSV) supports WAN fields.
 
@@ -272,7 +274,7 @@ GET    /api/v1/network-monitor/settings
 PUT    /api/v1/network-monitor/settings          (admin)
 GET    /api/v1/network-monitor/status            (latest ping + traffic for all routers)
 GET    /api/v1/network-monitor/ping/{router_id}  ?hours=1|6|24
-GET    /api/v1/network-monitor/traffic/aggregate ?hours=1|6|24  ← must be before /{router_id}
+GET    /api/v1/network-monitor/traffic/aggregate ?hours=1|6|24&router_ids=<uuid>&router_ids=<uuid>  ← must be before /{router_id}
 GET    /api/v1/network-monitor/traffic/{router_id} ?hours=1|6|24
 
 # Tasks
@@ -387,3 +389,4 @@ Then do a **hard refresh** in the browser (`Cmd+Shift+R`) to clear the cached JS
 - [x] Phase 10 — WAN IP fallback (wan_ip_address + wan_ssh_port + use_wan_ip per router; 10s internal timeout then WAN retry for deploy + test-connection; connected_via recorded in config_history; WAN column in Inventory table; import CSV/Excel support for WAN fields; migration 0004)
 - [x] Phase 11 — Network Monitor page (continuous ping + SNMP traffic; Celery Beat 30s scheduler; ping_results + snmp_traffic_metrics tables; ifHC 64-bit counters with Redis rate calculation; wan_interface per router; Recharts area/line charts; Overview/Traffic/Ping tabs; admin retention settings; migration 0005)
 - [x] Phase 12 — SNMPv3 multi-version support + Network Monitor hardening (SNMPv1/v2c/v3 per-router config with auth/priv protocol + encrypted passwords; snmp_config dict API in core/snmp.py; Inventory form: SNMP version selector + v3 parameter fields + wan_interface field; Network Monitor: UTC timestamp fix via toUTC(), X-axis smart interval, SNMP version badge on router cards; pysnmp 6.x event-loop guard (_ensure_event_loop); migration 0006)
+- [x] Phase 13 — Aggregate traffic filter (Traffic tab filter bar: All / per-location / Custom router picker; backend router_ids repeated query param on /traffic/aggregate; frontend URLSearchParams.append() for multi-ID params)
