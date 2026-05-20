@@ -31,9 +31,6 @@ celery_app.conf.update(
     },
 )
 
-# Register monitoring tasks so Beat can discover them
-import app.tasks.monitoring_tasks  # noqa: F401, E402
-
 
 def _celery_session():
     """
@@ -398,3 +395,8 @@ def bulk_deploy_configs(self, jobs: list[dict]) -> dict:
 
     _update_history_results(results)
     return {"results": results}
+
+
+# Import monitoring tasks LAST — after celery_app, _celery_session, and all other
+# names are fully defined — to avoid circular import (monitoring_tasks imports these).
+import app.tasks.monitoring_tasks  # noqa: F401, E402
