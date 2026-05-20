@@ -329,6 +329,9 @@ Then do a **hard refresh** in the browser (`Cmd+Shift+R`) to clear the cached JS
 - **`iputils-ping` required in backend image** — `core/ping.py` uses subprocess `/bin/ping`. The backend Dockerfile installs `iputils-ping` via apt. If it's missing, ping monitoring silently returns `error: ping binary not found`.
 - **SNMP traffic first reading has no rate** — On first poll after restart, `bits_in_per_sec` and `bits_out_per_sec` will be `null` because there's no previous counter in Redis. The second poll (30s later) produces the first rate value. The frontend shows `—` for null rates.
 - **Celery Beat vs Worker are separate services** — Beat only schedules; the Worker executes. Both must be running for monitoring to work. If only Worker runs, scheduled tasks never fire. `docker compose restart celery celery-beat` is the correct restart command.
+- **`pyasn1` pinned to `0.4.8`** — pysnmp 6.1.3 imports `pyasn1.compat.octets`, which was removed in pyasn1 0.5+. Do not upgrade pyasn1 without verifying pysnmp compatibility.
+- **pysnmp 6.x API change** — `getCmd`/`nextCmd` from `pysnmp.hlapi` now return a **single tuple** `(errInd, errStat, errIdx, varBinds)` directly, not a generator. `nextCmd`'s `varBinds` is `[[row1_vb], [row2_vb], ...]`. Old `for ... in getCmd(...)` silently fails inside try/except. See `core/snmp.py`.
+- **pysnmp event loop requirement** — pysnmp 6.x calls `asyncio.get_event_loop()` internally. After `asyncio.run()` closes the loop (e.g. between Celery task DB helpers), subsequent pysnmp calls fail with "no current event loop". `_ensure_event_loop()` in `core/snmp.py` creates a fresh one if needed. Call it at the start of any sync SNMP function that runs after `asyncio.run()`.
 
 ---
 
