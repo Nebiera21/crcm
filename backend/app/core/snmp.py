@@ -1,6 +1,10 @@
 """
 Synchronous SNMP polling via pysnmp + async shim.
 All numeric OIDs — no MIB resolution required.
+
+pysnmp 6.x API note: getCmd/nextCmd return a single tuple
+(errorIndication, errorStatus, errorIndex, varBinds) — NOT a generator.
+nextCmd's varBinds is a list of varBind lists, one per table row.
 """
 import asyncio
 import functools
@@ -25,12 +29,27 @@ OID_MEM_FREE = "1.3.6.1.4.1.9.2.1.8.0"    # freeMem (bytes)
 OID_MEM_USED = "1.3.6.1.4.1.9.2.1.6.0"    # bufferMemUsed (bytes)
 
 
+def _ensure_event_loop() -> None:
+    """
+    pysnmp 6.x uses asyncio.get_event_loop() internally.
+    After asyncio.run() closes a loop (e.g. between Celery task DB fetches), the
+    thread has no current loop. Create a fresh one so pysnmp can proceed.
+    """
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_closed():
+            raise RuntimeError("closed")
+    except RuntimeError:
+        asyncio.set_event_loop(asyncio.new_event_loop())
+
+
 def snmp_poll_sync(host: str, community: str, port: int = 161) -> dict:
     """
     Poll key metrics from a Cisco IOS device via SNMPv2c.
     Returns a dict suitable for SNMPMetrics schema.
     Never raises — errors are captured in the 'error' field.
     """
+    _ensure_event_loop()
     result: dict = {
         "reachable": False,
         "sys_descr": None,
@@ -74,18 +93,17 @@ def snmp_poll_sync(host: str, community: str, port: int = 161) -> dict:
 
         for key, oid in oid_targets:
             try:
-                for errorIndication, errorStatus, _errorIndex, varBinds in getCmd(
+                errorIndication, errorStatus, _errorIndex, varBinds = getCmd(
                     engine,
                     auth,
                     transport,
                     ContextData(),
                     ObjectType(ObjectIdentity(oid)),
-                ):
-                    if not errorIndication and not errorStatus:
-                        for varBind in varBinds:
-                            raw[key] = varBind[1]
-                            result["reachable"] = True
-                    break  # getCmd is a one-shot generator
+                )
+                if not errorIndication and not errorStatus:
+                    for varBind in varBinds:
+                        raw[key] = varBind[1]
+                        result["reachable"] = True
             except Exception:
                 pass
 
@@ -141,6 +159,7 @@ def snmp_traffic_sync(host: str, community: str, interface_name: str, port: int 
     bytes_in/bytes_out are raw octet counters — caller computes rate by comparing with previous reading.
     Never raises.
     """
+    _ensure_event_loop()
     result: dict = {
         "reachable": False,
         "if_index": None,
@@ -170,26 +189,28 @@ def snmp_traffic_sync(host: str, community: str, interface_name: str, port: int 
         auth = CommunityData(community, mpModel=1)
         transport = UdpTransportTarget((host, port), timeout=5, retries=1)
 
-        # Walk ifDescr table to find ifIndex for the given interface name
+        # Walk ifDescr table to find ifIndex for the given interface name.
+        # nextCmd in pysnmp 6.x returns a single tuple:
+        # (errorIndication, errorStatus, errorIndex, [[varBind, ...], [varBind, ...], ...])
         if_index: int | None = None
-        for errorIndication, errorStatus, _, varBinds in nextCmd(
+        errorIndication, errorStatus, _, all_varBinds = nextCmd(
             engine, auth, transport, ContextData(),
             ObjectType(ObjectIdentity(OID_IF_DESCR_TABLE)),
             lexicographicMode=False,
-        ):
-            if errorIndication or errorStatus:
-                break
-            for varBind in varBinds:
-                oid_str = str(varBind[0])
-                desc = str(varBind[1]).strip()
-                if desc == interface_name.strip():
-                    try:
-                        if_index = int(oid_str.split(".")[-1])
-                    except (ValueError, IndexError):
-                        pass
+        )
+        if not errorIndication and not errorStatus:
+            for varBinds in all_varBinds:
+                for varBind in varBinds:
+                    oid_str = str(varBind[0])
+                    desc = str(varBind[1]).strip()
+                    if desc == interface_name.strip():
+                        try:
+                            if_index = int(oid_str.split(".")[-1])
+                        except (ValueError, IndexError):
+                            pass
+                        break
+                if if_index is not None:
                     break
-            if if_index is not None:
-                break
 
         if if_index is None:
             result["error"] = f"Interface {interface_name!r} not found via SNMP"
@@ -200,14 +221,13 @@ def snmp_traffic_sync(host: str, community: str, interface_name: str, port: int 
 
         def _get(oid: str) -> int | None:
             try:
-                for errInd, errStat, _, vbs in getCmd(
+                errInd, errStat, _, vbs = getCmd(
                     engine, auth, transport, ContextData(),
                     ObjectType(ObjectIdentity(oid)),
-                ):
-                    if not errInd and not errStat:
-                        for vb in vbs:
-                            return int(vb[1])
-                    break
+                )
+                if not errInd and not errStat:
+                    for vb in vbs:
+                        return int(vb[1])
             except Exception:
                 pass
             return None
