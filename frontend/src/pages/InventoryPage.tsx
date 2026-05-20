@@ -46,13 +46,21 @@ function RouterFormModal({ router: existing, onClose, onSaved }: RouterFormModal
     ip_address: existing?.ip_address ?? '',
     location: existing?.location ?? '',
     model: existing?.model ?? '',
+    snmp_version: (existing?.snmp_version ?? 'v2c') as 'v1' | 'v2c' | 'v3',
     snmp_community: existing?.snmp_community ?? '',
+    snmp_v3_username: existing?.snmp_v3_username ?? '',
+    snmp_v3_auth_protocol: existing?.snmp_v3_auth_protocol ?? '',
+    snmp_v3_auth_password: '',
+    snmp_v3_priv_protocol: existing?.snmp_v3_priv_protocol ?? '',
+    snmp_v3_priv_password: '',
+    snmp_v3_security_level: (existing?.snmp_v3_security_level ?? 'authPriv') as 'noAuthNoPriv' | 'authNoPriv' | 'authPriv',
     notes: existing?.notes ?? '',
     is_active: existing?.is_active ?? true,
     credential_id: existing?.credential_id ?? '',
     wan_ip_address: existing?.wan_ip_address ?? '',
     wan_ssh_port: existing?.wan_ssh_port != null ? String(existing.wan_ssh_port) : '',
     use_wan_ip: existing?.use_wan_ip ?? false,
+    wan_interface: existing?.wan_interface ?? 'FastEthernet4',
   })
   const [sshCreds, setSshCreds] = useState<SshCredentialItem[]>([])
   const [error, setError] = useState('')
@@ -76,18 +84,29 @@ function RouterFormModal({ router: existing, onClose, onSaved }: RouterFormModal
     setError('')
     try {
       const wanPort = form.wan_ssh_port.trim() ? parseInt(form.wan_ssh_port.trim(), 10) : null
+      const isV3 = form.snmp_version === 'v3'
+      const showAuth = isV3 && form.snmp_v3_security_level !== 'noAuthNoPriv'
+      const showPriv = isV3 && form.snmp_v3_security_level === 'authPriv'
       const payload: RouterCreate = {
         hostname: form.hostname.trim(),
         ip_address: form.ip_address.trim(),
         location: form.location.trim() || null,
         model: form.model.trim() || null,
-        snmp_community: form.snmp_community.trim() || null,
+        snmp_version: form.snmp_version,
+        snmp_community: !isV3 ? (form.snmp_community.trim() || null) : null,
+        snmp_v3_username: isV3 ? (form.snmp_v3_username.trim() || null) : null,
+        snmp_v3_auth_protocol: showAuth ? ((form.snmp_v3_auth_protocol || null) as import('@/types/router').SnmpAuthProtocol | null) : null,
+        snmp_v3_auth_password: showAuth ? (form.snmp_v3_auth_password || null) : null,
+        snmp_v3_priv_protocol: showPriv ? ((form.snmp_v3_priv_protocol || null) as import('@/types/router').SnmpPrivProtocol | null) : null,
+        snmp_v3_priv_password: showPriv ? (form.snmp_v3_priv_password || null) : null,
+        snmp_v3_security_level: isV3 ? form.snmp_v3_security_level : null,
         notes: form.notes.trim() || null,
         is_active: form.is_active,
         credential_id: form.credential_id || null,
         wan_ip_address: form.wan_ip_address.trim() || null,
         wan_ssh_port: wanPort,
         use_wan_ip: form.use_wan_ip,
+        wan_interface: form.wan_interface.trim() || 'FastEthernet4',
       }
       if (isEdit) {
         await updateRouter(existing!.id, payload)
@@ -139,26 +158,131 @@ function RouterFormModal({ router: existing, onClose, onSaved }: RouterFormModal
               ))}
             </select>
           </div>
-          <Field label="SNMP Community" value={form.snmp_community} onChange={(v) => set('snmp_community', v)} placeholder="public" />
+          {/* SNMP section */}
+          <div className="border border-gray-700 rounded-lg p-3 space-y-3">
+            <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">SNMP</p>
+
+            {/* Version selector */}
+            <div>
+              <label className="block text-sm font-medium text-gray-300 mb-1.5">Version</label>
+              <div className="flex gap-2">
+                {(['v1', 'v2c', 'v3'] as const).map(v => (
+                  <button
+                    key={v}
+                    type="button"
+                    onClick={() => set('snmp_version', v)}
+                    className={`px-3 py-1.5 text-xs font-semibold rounded-lg border transition ${
+                      form.snmp_version === v
+                        ? 'bg-brand-600 border-brand-500 text-white'
+                        : 'bg-gray-800 border-gray-700 text-gray-400 hover:text-white'
+                    }`}
+                  >
+                    {v.toUpperCase()}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* v1 / v2c: community string */}
+            {form.snmp_version !== 'v3' && (
+              <Field label="Community String" value={form.snmp_community} onChange={(v) => set('snmp_community', v)} placeholder="public" />
+            )}
+
+            {/* v3: full parameter set */}
+            {form.snmp_version === 'v3' && (
+              <div className="space-y-3">
+                <Field label="Username *" value={form.snmp_v3_username} onChange={(v) => set('snmp_v3_username', v)} placeholder="snmpv3user" />
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-1.5">Security Level</label>
+                  <select
+                    value={form.snmp_v3_security_level}
+                    onChange={e => set('snmp_v3_security_level', e.target.value)}
+                    className="w-full rounded-lg bg-gray-800 border border-gray-700 px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-brand-500"
+                  >
+                    <option value="noAuthNoPriv">noAuthNoPriv</option>
+                    <option value="authNoPriv">authNoPriv</option>
+                    <option value="authPriv">authPriv</option>
+                  </select>
+                </div>
+
+                {form.snmp_v3_security_level !== 'noAuthNoPriv' && (
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-300 mb-1.5">Auth Protocol</label>
+                      <select
+                        value={form.snmp_v3_auth_protocol}
+                        onChange={e => set('snmp_v3_auth_protocol', e.target.value)}
+                        className="w-full rounded-lg bg-gray-800 border border-gray-700 px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-brand-500"
+                      >
+                        <option value="">Select…</option>
+                        <option value="MD5">MD5</option>
+                        <option value="SHA">SHA-1</option>
+                        <option value="SHA256">SHA-256</option>
+                        <option value="SHA384">SHA-384</option>
+                        <option value="SHA512">SHA-512</option>
+                      </select>
+                    </div>
+                    <PasswordField
+                      label="Auth Password"
+                      value={form.snmp_v3_auth_password}
+                      onChange={v => set('snmp_v3_auth_password', v)}
+                      placeholder={isEdit ? '(unchanged)' : ''}
+                    />
+                  </div>
+                )}
+
+                {form.snmp_v3_security_level === 'authPriv' && (
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-300 mb-1.5">Priv Protocol</label>
+                      <select
+                        value={form.snmp_v3_priv_protocol}
+                        onChange={e => set('snmp_v3_priv_protocol', e.target.value)}
+                        className="w-full rounded-lg bg-gray-800 border border-gray-700 px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-brand-500"
+                      >
+                        <option value="">Select…</option>
+                        <option value="DES">DES</option>
+                        <option value="AES">AES-128</option>
+                        <option value="AES192">AES-192</option>
+                        <option value="AES256">AES-256</option>
+                      </select>
+                    </div>
+                    <PasswordField
+                      label="Priv Password"
+                      value={form.snmp_v3_priv_password}
+                      onChange={v => set('snmp_v3_priv_password', v)}
+                      placeholder={isEdit ? '(unchanged)' : ''}
+                    />
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
 
           {/* WAN IP section */}
           <div className="border border-gray-700 rounded-lg p-3 space-y-3">
-            <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">WAN Fallback (SSH)</p>
+            <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">WAN</p>
             <div className="grid grid-cols-3 gap-3">
               <div className="col-span-2">
                 <Field label="WAN IP Address" value={form.wan_ip_address} onChange={(v) => set('wan_ip_address', v)} placeholder="203.0.113.1" />
               </div>
               <Field label="SSH Port" value={form.wan_ssh_port} onChange={(v) => set('wan_ssh_port', v)} placeholder="22" />
             </div>
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={form.use_wan_ip}
-                onChange={(e) => set('use_wan_ip', e.target.checked)}
-                className="w-4 h-4 accent-brand-600"
-              />
-              <span className="text-sm text-gray-300">Use WAN IP as fallback on connection timeout</span>
-            </label>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="WAN Interface (SNMP Traffic)" value={form.wan_interface} onChange={(v) => set('wan_interface', v)} placeholder="GigabitEthernet0/0" />
+              <div className="flex items-end pb-0.5">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={form.use_wan_ip}
+                    onChange={(e) => set('use_wan_ip', e.target.checked)}
+                    className="w-4 h-4 accent-brand-600"
+                  />
+                  <span className="text-sm text-gray-300">SSH fallback on timeout</span>
+                </label>
+              </div>
+            </div>
           </div>
 
           <div>
@@ -213,6 +337,22 @@ function Field({ label, value, onChange, placeholder }: { label: string; value: 
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
+        className="w-full rounded-lg bg-gray-800 border border-gray-700 px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-brand-500"
+      />
+    </div>
+  )
+}
+
+function PasswordField({ label, value, onChange, placeholder }: { label: string; value: string; onChange: (v: string) => void; placeholder?: string }) {
+  return (
+    <div>
+      <label className="block text-sm font-medium text-gray-300 mb-1.5">{label}</label>
+      <input
+        type="password"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        autoComplete="new-password"
         className="w-full rounded-lg bg-gray-800 border border-gray-700 px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-brand-500"
       />
     </div>

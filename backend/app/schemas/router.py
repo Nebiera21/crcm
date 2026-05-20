@@ -3,6 +3,11 @@ import ipaddress
 from datetime import datetime
 from pydantic import BaseModel, field_validator
 
+_SNMP_VERSIONS = {"v1", "v2c", "v3"}
+_AUTH_PROTOCOLS = {"MD5", "SHA", "SHA224", "SHA256", "SHA384", "SHA512"}
+_PRIV_PROTOCOLS = {"DES", "AES", "AES128", "AES192", "AES256"}
+_SECURITY_LEVELS = {"noAuthNoPriv", "authNoPriv", "authPriv"}
+
 
 def _validate_ip(v: str) -> str:
     try:
@@ -18,7 +23,17 @@ class RouterCreate(BaseModel):
     location: str | None = None
     model: str | None = None
     is_active: bool = True
+
+    # SNMP
     snmp_community: str | None = None
+    snmp_version: str = "v2c"
+    snmp_v3_username: str | None = None
+    snmp_v3_auth_protocol: str | None = None
+    snmp_v3_auth_password: str | None = None   # write-only, not stored (encrypted by API)
+    snmp_v3_priv_protocol: str | None = None
+    snmp_v3_priv_password: str | None = None   # write-only, not stored (encrypted by API)
+    snmp_v3_security_level: str | None = None
+
     notes: str | None = None
     credential_id: uuid.UUID | None = None
     wan_ip_address: str | None = None
@@ -46,6 +61,34 @@ class RouterCreate(BaseModel):
             return None
         return _validate_ip(str(v).strip())
 
+    @field_validator("snmp_version")
+    @classmethod
+    def validate_snmp_version(cls, v: str) -> str:
+        if v not in _SNMP_VERSIONS:
+            raise ValueError(f"snmp_version must be one of: {', '.join(sorted(_SNMP_VERSIONS))}")
+        return v
+
+    @field_validator("snmp_v3_auth_protocol", mode="before")
+    @classmethod
+    def validate_auth_proto(cls, v: str | None) -> str | None:
+        if v and v.upper() not in _AUTH_PROTOCOLS:
+            raise ValueError(f"snmp_v3_auth_protocol must be one of: {', '.join(sorted(_AUTH_PROTOCOLS))}")
+        return v.upper() if v else None
+
+    @field_validator("snmp_v3_priv_protocol", mode="before")
+    @classmethod
+    def validate_priv_proto(cls, v: str | None) -> str | None:
+        if v and v.upper() not in _PRIV_PROTOCOLS:
+            raise ValueError(f"snmp_v3_priv_protocol must be one of: {', '.join(sorted(_PRIV_PROTOCOLS))}")
+        return v.upper() if v else None
+
+    @field_validator("snmp_v3_security_level", mode="before")
+    @classmethod
+    def validate_sec_level(cls, v: str | None) -> str | None:
+        if v and v not in _SECURITY_LEVELS:
+            raise ValueError(f"snmp_v3_security_level must be one of: {', '.join(sorted(_SECURITY_LEVELS))}")
+        return v
+
 
 class RouterUpdate(BaseModel):
     hostname: str | None = None
@@ -53,7 +96,16 @@ class RouterUpdate(BaseModel):
     location: str | None = None
     model: str | None = None
     is_active: bool | None = None
+
     snmp_community: str | None = None
+    snmp_version: str | None = None
+    snmp_v3_username: str | None = None
+    snmp_v3_auth_protocol: str | None = None
+    snmp_v3_auth_password: str | None = None   # write-only
+    snmp_v3_priv_protocol: str | None = None
+    snmp_v3_priv_password: str | None = None   # write-only
+    snmp_v3_security_level: str | None = None
+
     notes: str | None = None
     credential_id: uuid.UUID | None = None
     wan_ip_address: str | None = None
@@ -75,6 +127,34 @@ class RouterUpdate(BaseModel):
             return None
         return _validate_ip(str(v).strip())
 
+    @field_validator("snmp_version", mode="before")
+    @classmethod
+    def validate_snmp_version(cls, v: str | None) -> str | None:
+        if v and v not in _SNMP_VERSIONS:
+            raise ValueError(f"snmp_version must be one of: {', '.join(sorted(_SNMP_VERSIONS))}")
+        return v
+
+    @field_validator("snmp_v3_auth_protocol", mode="before")
+    @classmethod
+    def validate_auth_proto(cls, v: str | None) -> str | None:
+        if v and v.upper() not in _AUTH_PROTOCOLS:
+            raise ValueError(f"snmp_v3_auth_protocol must be one of: {', '.join(sorted(_AUTH_PROTOCOLS))}")
+        return v.upper() if v else None
+
+    @field_validator("snmp_v3_priv_protocol", mode="before")
+    @classmethod
+    def validate_priv_proto(cls, v: str | None) -> str | None:
+        if v and v.upper() not in _PRIV_PROTOCOLS:
+            raise ValueError(f"snmp_v3_priv_protocol must be one of: {', '.join(sorted(_PRIV_PROTOCOLS))}")
+        return v.upper() if v else None
+
+    @field_validator("snmp_v3_security_level", mode="before")
+    @classmethod
+    def validate_sec_level(cls, v: str | None) -> str | None:
+        if v and v not in _SECURITY_LEVELS:
+            raise ValueError(f"snmp_v3_security_level must be one of: {', '.join(sorted(_SECURITY_LEVELS))}")
+        return v
+
 
 class RouterResponse(BaseModel):
     model_config = {"from_attributes": True}
@@ -86,6 +166,11 @@ class RouterResponse(BaseModel):
     model: str | None
     is_active: bool
     snmp_community: str | None
+    snmp_version: str
+    snmp_v3_username: str | None
+    snmp_v3_auth_protocol: str | None
+    snmp_v3_priv_protocol: str | None
+    snmp_v3_security_level: str | None
     notes: str | None
     credential_id: uuid.UUID | None
     wan_ip_address: str | None

@@ -128,13 +128,16 @@ async def get_status(
     result_list = []
     for r in routers:
         rid = str(r.id)
+        snmp_ver = getattr(r, "snmp_version", None) or "v2c"
+        has_snmp = bool(r.snmp_community) if snmp_ver in ("v1", "v2c") else bool(getattr(r, "snmp_v3_username", None))
         result_list.append(RouterStatus(
             router_id=rid,
             hostname=r.hostname,
             ip_address=r.ip_address,
             wan_ip_address=r.wan_ip_address,
             wan_interface=r.wan_interface,
-            has_snmp=bool(r.snmp_community),
+            snmp_version=snmp_ver,
+            has_snmp=has_snmp,
             location=r.location,
             lan_ping=ping_map.get((rid, "lan")),
             wan_ping=ping_map.get((rid, "wan")),

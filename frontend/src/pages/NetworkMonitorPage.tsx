@@ -48,12 +48,26 @@ function formatBps(bits: number | null | undefined): string {
   return `${bits.toFixed(0)} bps`
 }
 
+// Backend returns naive UTC datetimes without timezone suffix.
+// Append 'Z' so the browser parses them as UTC, not local time.
+function toUTC(iso: string): Date {
+  if (!iso.endsWith('Z') && !iso.includes('+') && !/T.*-\d\d:\d\d$/.test(iso)) {
+    return new Date(iso + 'Z')
+  }
+  return new Date(iso)
+}
+
 function formatTime(iso: string): string {
-  return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  return toUTC(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
 
 function formatTimeFull(iso: string): string {
-  return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+  return toUTC(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+}
+
+function xAxisInterval(dataLen: number): number {
+  // Show ~6 evenly-spaced ticks regardless of dataset size
+  return Math.max(0, Math.floor(dataLen / 6) - 1)
 }
 
 function routerHealth(r: RouterStatus): RouterHealth {
@@ -192,16 +206,20 @@ function RouterCard({ r }: { r: RouterStatus }) {
             <ArrowDownRight className="w-3 h-3 text-purple-400" />
             <span className="text-purple-400">{formatBps(r.traffic.bits_out_per_sec)}</span>
           </div>
-          <div className="flex items-center gap-1 text-xs">
-            <span className="text-gray-600">{r.wan_interface}</span>
-            <span className={`text-xs ${r.traffic.if_status === 'up' ? 'text-green-500' : 'text-red-400'}`}>
-              {r.traffic.if_status ?? '—'}
-            </span>
+          <div className="flex items-center justify-between text-xs">
+            <div className="flex items-center gap-1">
+              <span className="text-gray-600">{r.wan_interface}</span>
+              <span className={`${r.traffic.if_status === 'up' ? 'text-green-500' : 'text-red-400'}`}>
+                {r.traffic.if_status ?? '—'}
+              </span>
+            </div>
+            <span className="text-gray-700 font-mono uppercase">{r.snmp_version}</span>
           </div>
         </div>
       ) : r.has_snmp ? (
-        <div className="border-t border-gray-800 pt-2.5">
+        <div className="border-t border-gray-800 pt-2.5 flex items-center justify-between">
           <p className="text-xs text-gray-600">Waiting for traffic data…</p>
+          <span className="text-xs text-gray-700 font-mono uppercase">{r.snmp_version}</span>
         </div>
       ) : (
         <div className="border-t border-gray-800 pt-2.5">
@@ -323,7 +341,7 @@ function PingTableRow({ r, expanded, onToggle }: { r: RouterStatus; expanded: bo
                     wan: wanData.find(w => w.timestamp === p.timestamp)?.latency_ms ?? null,
                   }))}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
-                    <XAxis dataKey="t" tick={{ fill: '#6b7280', fontSize: 10 }} interval="preserveStartEnd" />
+                    <XAxis dataKey="t" tick={{ fill: '#6b7280', fontSize: 10 }} interval={xAxisInterval(lanData.length)} />
                     <YAxis tick={{ fill: '#6b7280', fontSize: 10 }} unit=" ms" width={55} />
                     <Tooltip
                       contentStyle={{ background: '#111827', border: '1px solid #374151', borderRadius: 8, fontSize: 11 }}
@@ -440,7 +458,7 @@ function TrafficTableRow({ r, expanded, onToggle }: { r: RouterStatus; expanded:
                       </linearGradient>
                     </defs>
                     <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
-                    <XAxis dataKey="t" tick={{ fill: '#6b7280', fontSize: 10 }} interval="preserveStartEnd" />
+                    <XAxis dataKey="t" tick={{ fill: '#6b7280', fontSize: 10 }} interval={xAxisInterval(history.length)} />
                     <YAxis tick={{ fill: '#6b7280', fontSize: 10 }} unit=" M" width={52} />
                     <Tooltip
                       contentStyle={{ background: '#111827', border: '1px solid #374151', borderRadius: 8, fontSize: 11 }}
@@ -505,7 +523,7 @@ function AggregateChart({ hours }: { hours: number }) {
             </linearGradient>
           </defs>
           <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" vertical={false} />
-          <XAxis dataKey="t" tick={{ fill: '#6b7280', fontSize: 11 }} interval="preserveStartEnd" />
+          <XAxis dataKey="t" tick={{ fill: '#6b7280', fontSize: 11 }} interval={xAxisInterval(chartData.length)} />
           <YAxis
             tick={{ fill: '#6b7280', fontSize: 11 }}
             domain={[0, maxVal * 1.2]}

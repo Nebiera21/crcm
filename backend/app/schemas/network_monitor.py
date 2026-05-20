@@ -39,6 +39,7 @@ class RouterStatus(BaseModel):
     ip_address: str
     wan_ip_address: str | None
     wan_interface: str | None
+    snmp_version: str
     has_snmp: bool
     location: str | None
     lan_ping: LatestPing | None

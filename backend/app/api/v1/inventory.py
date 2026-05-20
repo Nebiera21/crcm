@@ -195,6 +195,18 @@ async def import_routers(
     return ImportResult(created=created, skipped_duplicate=skipped, errors=errors)
 
 
+def _apply_snmp_v3_passwords(data: dict, body) -> dict:
+    """Encrypt v3 plaintext passwords and insert into data dict (removing plaintext keys)."""
+    from app.core.security import encrypt_secret
+    data.pop("snmp_v3_auth_password", None)
+    data.pop("snmp_v3_priv_password", None)
+    if getattr(body, "snmp_v3_auth_password", None):
+        data["snmp_v3_auth_password_encrypted"] = encrypt_secret(body.snmp_v3_auth_password)
+    if getattr(body, "snmp_v3_priv_password", None):
+        data["snmp_v3_priv_password_encrypted"] = encrypt_secret(body.snmp_v3_priv_password)
+    return data
+
+
 @router.post("/", response_model=RouterResponse, status_code=status.HTTP_201_CREATED)
 async def create_router(
     body: RouterCreate,
@@ -209,7 +221,8 @@ async def create_router(
             detail=f"IP address {body.ip_address} is already in use",
         )
 
-    r = Router(**body.model_dump())
+    data = _apply_snmp_v3_passwords(body.model_dump(), body)
+    r = Router(**data)
     db.add(r)
     await db.flush()
     await _audit(db, current_user.id, "router.create", str(r.id), {"hostname": r.hostname, "ip": r.ip_address}, request)
@@ -240,13 +253,22 @@ async def update_router(
     if not r:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Router not found")
 
-    update_data = body.model_dump(exclude_unset=True)
+    update_data = body.model_dump(exclude_unset=True, exclude={"snmp_v3_auth_password", "snmp_v3_priv_password"})
 
     new_ip = update_data.get("ip_address")
     if new_ip and new_ip != r.ip_address:
         conflict = (await db.execute(select(Router).where(Router.ip_address == new_ip))).scalar_one_or_none()
         if conflict:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"IP address {new_ip} is already in use")
+
+    # Handle v3 password updates (encrypt if provided, clear if explicitly set to empty)
+    from app.core.security import encrypt_secret
+    if "snmp_v3_auth_password" in body.model_fields_set:
+        pw = body.snmp_v3_auth_password
+        update_data["snmp_v3_auth_password_encrypted"] = encrypt_secret(pw) if pw else None
+    if "snmp_v3_priv_password" in body.model_fields_set:
+        pw = body.snmp_v3_priv_password
+        update_data["snmp_v3_priv_password_encrypted"] = encrypt_secret(pw) if pw else None
 
     for field, value in update_data.items():
         setattr(r, field, value)

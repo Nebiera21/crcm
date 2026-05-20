@@ -27,6 +27,7 @@ export interface RouterStatus {
   ip_address: string
   wan_ip_address: string | null
   wan_interface: string | null
+  snmp_version: string
   has_snmp: boolean
   location: string | null
   lan_ping: LatestPing | null

@@ -163,12 +163,13 @@ async def snmp_poll(
     r = (await db.execute(select(Router).where(Router.id == body.router_id))).scalar_one_or_none()
     if not r:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Router not found")
-    if not r.snmp_community:
+    snmp_cfg = snmp_core.router_snmp_config(r)
+    if not snmp_core.snmp_is_configured(snmp_cfg):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Router has no SNMP community configured.",
+            detail="Router has no SNMP configured (set community for v1/v2c or username for v3).",
         )
-    metrics = await snmp_core.snmp_poll(r.ip_address, r.snmp_community)
+    metrics = await snmp_core.snmp_poll(r.ip_address, snmp_cfg)
     return SNMPMetrics(
         router_id=r.id,
         hostname=r.hostname,

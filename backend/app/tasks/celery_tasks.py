@@ -265,8 +265,10 @@ def bulk_snmp_poll(self, router_ids: list[str]) -> dict:
         return {"results": {}}
 
     def _poll(r) -> tuple[str, dict]:
+        from app.core.snmp import router_snmp_config, snmp_is_configured
         polled_at = datetime.now(timezone.utc).isoformat()
-        if not r.snmp_community:
+        snmp_cfg = router_snmp_config(r)
+        if not snmp_is_configured(snmp_cfg):
             return str(r.id), {
                 "hostname": r.hostname,
                 "ip_address": r.ip_address,
@@ -277,10 +279,10 @@ def bulk_snmp_poll(self, router_ids: list[str]) -> dict:
                 "cpu_5min_percent": None,
                 "mem_free_bytes": None,
                 "if_number": None,
-                "error": "No SNMP community configured",
+                "error": "No SNMP configured",
                 "polled_at": polled_at,
             }
-        metrics = snmp_poll_sync(r.ip_address, r.snmp_community)
+        metrics = snmp_poll_sync(r.ip_address, snmp_cfg)
         return str(r.id), {
             "hostname": r.hostname,
             "ip_address": r.ip_address,

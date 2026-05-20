@@ -138,6 +138,7 @@ def poll_all_monitoring(self) -> dict:
     all_traffic: list[dict] = []
 
     def _poll(router) -> tuple[list[dict], dict | None]:
+        from app.core.snmp import router_snmp_config, snmp_is_configured
         pings: list[dict] = []
         traffic: dict | None = None
 
@@ -160,16 +161,18 @@ def poll_all_monitoring(self) -> dict:
                     "is_up": wan.get("is_up", False),
                 })
 
-        if snmp_enabled and router.snmp_community and router.wan_interface:
-            t = snmp_traffic_sync(router.ip_address, router.snmp_community, router.wan_interface)
-            if t.get("reachable"):
-                traffic = {
-                    "router_id": str(router.id),
-                    "interface_name": router.wan_interface,
-                    "bytes_in": t.get("bytes_in"),
-                    "bytes_out": t.get("bytes_out"),
-                    "if_status": t.get("if_status"),
-                }
+        if snmp_enabled and router.wan_interface:
+            snmp_cfg = router_snmp_config(router)
+            if snmp_is_configured(snmp_cfg):
+                t = snmp_traffic_sync(router.ip_address, snmp_cfg, router.wan_interface)
+                if t.get("reachable"):
+                    traffic = {
+                        "router_id": str(router.id),
+                        "interface_name": router.wan_interface,
+                        "bytes_in": t.get("bytes_in"),
+                        "bytes_out": t.get("bytes_out"),
+                        "if_status": t.get("if_status"),
+                    }
 
         return pings, traffic
 
