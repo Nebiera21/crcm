@@ -21,12 +21,7 @@ docker compose up -d
 pip install -r requirements.txt
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
-# Run all tests
-pytest
-
-# Run a single test file
-pytest tests/test_ssh.py -v
-
+# No test suite exists yet — backend/tests/ is empty
 # Lint
 ruff check app/
 ```
@@ -79,6 +74,8 @@ Do not call Netmiko directly from FastAPI coroutines. Same rule applies to `snmp
 ### Celery DB access
 Celery workers use `asyncio.run()` to run async SQLAlchemy queries inside sync task functions (workers have no running event loop). See `tasks/celery_tasks.py::_fetch_deploy_data`.
 
+**NullPool pattern** — Celery tasks must NOT reuse the global `engine` (which uses connection pooling). After `asyncio.run()` exits and closes the event loop, pooled connections have stale asyncio futures tied to the dead loop; reusing them raises `Future attached to a different loop`. The `_celery_session()` context manager creates a **fresh `NullPool` engine per task** (no connection caching), executes the query via `asyncio.run()`, then disposes immediately. This is the only safe pattern for async SQLAlchemy in Celery workers.
+
 ### Celery Beat — scheduled monitoring
 `tasks/celery_tasks.py` defines `beat_schedule` with two recurring tasks:
 - `crcm.poll_all_monitoring` — every 30 seconds: pings all active routers (LAN + WAN) and polls SNMP traffic counters
@@ -88,6 +85,8 @@ Beat tasks are implemented in `tasks/monitoring_tasks.py`, which is imported at 
 
 ### Auth
 JWT tokens via `python-jose`. Three roles: `admin`, `operator`, `readonly`. Role is embedded in the JWT claim and checked per-endpoint with a FastAPI dependency. See permissions table below.
+
+**Frontend HTTP client** (`frontend/src/lib/apiClient.ts`): Axios instance with `/api/v1` baseURL. A `refreshPromise` singleton prevents a thundering herd of refresh calls when multiple in-flight requests get 401 simultaneously — the first 401 triggers one refresh and all others wait on the same promise. On refresh failure, tokens are cleared and the user is redirected to `/login`. TypeScript types for API responses live in `frontend/src/types/` (one file per domain, manually mirrored from Pydantic schemas — not auto-generated).
 
 ### Command presets (Monitor)
 Show commands are stored in `command_presets` (DB table, not hardcoded). Migration `0003` seeds 10 defaults. Admin CRUD via `GET/POST/DELETE /monitor/presets`. All roles can read; only admin can add/delete. The old `SHOW_COMMANDS` list in `core/ssh.py` is kept as a reference but is no longer used by the API.
@@ -369,7 +368,7 @@ Then do a **hard refresh** in the browser (`Cmd+Shift+R`) to clear the cached JS
 - **SNMP traffic first reading has no rate** — On first poll after restart, `bits_in_per_sec` and `bits_out_per_sec` will be `null` because there's no previous counter in Redis. The second poll (30s later) produces the first rate value. The frontend shows `—` for null rates.
 - **Celery Beat vs Worker are separate services** — Beat only schedules; the Worker executes. Both must be running for monitoring to work. If only Worker runs, scheduled tasks never fire. `docker compose restart celery celery-beat` is the correct restart command.
 - **`pyasn1` pinned to `0.4.8`** — pysnmp 6.1.3 imports `pyasn1.compat.octets`, which was removed in pyasn1 0.5+. Do not upgrade pyasn1 without verifying pysnmp compatibility.
-- **pysnmp 6.x API change** — `getCmd`/`nextCmd` from `pysnmp.hlapi` now return a **single tuple** `(errInd, errStat, errIdx, varBinds)` directly, not a generator. `nextCmd`'s `varBinds` is `[[row1_vb], [row2_vb], ...]`. Old `for ... in getCmd(...)` silently fails inside try/except. See `core/snmp.py`.
+- **pysnmp 6.x API change** — `getCmd`/`nextCmd` from `pysnmp.hlapi` now return a **single tuple** `(errInd, errStat, errIdx, varBinds)` directly, not a generator. Old `for ... in getCmd(...)` silently fails inside try/except. **`nextCmd` returns only 1 PDU of rows (one GETNEXT response), not a full walk** — use `bulkCmd` in a loop instead for table walks. See `snmp_traffic_sync` in `core/snmp.py` for the pattern.
 - **pysnmp event loop requirement** — pysnmp 6.x calls `asyncio.get_event_loop()` internally. After `asyncio.run()` closes the loop (e.g. between Celery task DB helpers), subsequent pysnmp calls fail with "no current event loop". `_ensure_event_loop()` in `core/snmp.py` creates a fresh one if needed. Call it at the start of any sync SNMP function that runs after `asyncio.run()`.
 - **DB timestamps naive UTC, browser parses as local** — PostgreSQL stores `TIMESTAMP WITHOUT TIME ZONE` and FastAPI/Pydantic v2 serializes as ISO without 'Z'. `new Date("2026-05-20T06:00:00")` in Chrome treats this as **local** time, not UTC. Always append 'Z' on the frontend before `new Date(iso + 'Z')` for correct UTC interpretation. See `toUTC()` in `NetworkMonitorPage.tsx`.
 

@@ -182,8 +182,8 @@ function RouterSelector({
               />
               <span className="text-sm text-white font-medium truncate">{r.hostname}</span>
               {showSnmpBadge && (
-                <span className={`text-xs px-1.5 py-0.5 rounded shrink-0 ${r.snmp_community ? 'bg-green-900/40 text-green-400' : 'bg-gray-800 text-gray-600'}`}>
-                  {r.snmp_community ? 'SNMP' : 'no SNMP'}
+                <span className={`text-xs px-1.5 py-0.5 rounded shrink-0 ${(r.snmp_community || r.snmp_v3_username) ? 'bg-green-900/40 text-green-400' : 'bg-gray-800 text-gray-600'}`}>
+                  {(r.snmp_community || r.snmp_v3_username) ? 'SNMP' : 'no SNMP'}
                 </span>
               )}
               <span className="text-xs text-gray-500 ml-auto font-mono shrink-0">{r.ip_address}</span>
@@ -829,7 +829,7 @@ function SNMPSection({ routers }: { routers: Router[] }) {
   }
 
   const routerCount = selectedRouterIds.size
-  const noSnmpCount = [...selectedRouterIds].filter(id => !routers.find(r => r.id === id)?.snmp_community).length
+  const noSnmpCount = [...selectedRouterIds].filter(id => { const r = routers.find(r => r.id === id); return !r?.snmp_community && !r?.snmp_v3_username }).length
 
   return (
     <section className="bg-gray-900/50 border border-gray-800 rounded-2xl p-5 space-y-5">

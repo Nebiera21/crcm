@@ -275,8 +275,8 @@ def snmp_traffic_sync(host: str, snmp_config: dict, interface_name: str, port: i
             ObjectType,
             SnmpEngine,
             UdpTransportTarget,
+            bulkCmd,
             getCmd,
-            nextCmd,
         )
     except ImportError as exc:
         result["error"] = f"pysnmp not available: {exc}"
@@ -288,20 +288,30 @@ def snmp_traffic_sync(host: str, snmp_config: dict, interface_name: str, port: i
         transport = UdpTransportTarget((host, port), timeout=5, retries=1)
 
         # Walk ifDescr table to resolve interface name → ifIndex.
-        # nextCmd in pysnmp 6.x returns a single tuple:
-        # (errorIndication, errorStatus, errorIndex, [[varBind, ...], ...])
+        # pysnmp 6.x nextCmd returns only 1 PDU worth of rows (first GETNEXT response).
+        # Use bulkCmd in a loop instead: each call returns up to BULK_REPS rows;
+        # loop until the interface is found or OID leaves the ifDescr subtree.
+        BULK_REPS = 50
         if_index: int | None = None
-        errorIndication, errorStatus, _, all_varBinds = nextCmd(
-            engine, auth, transport, ContextData(),
-            ObjectType(ObjectIdentity(OID_IF_DESCR_TABLE)),
-            lexicographicMode=False,
-        )
-        if not errorIndication and not errorStatus:
-            for varBinds in all_varBinds:
+        current_oid = OID_IF_DESCR_TABLE
+        target = interface_name.strip()
+
+        for _ in range(20):  # safety cap: 20 * 50 = 1000 interfaces max
+            errInd, errStat, _, batch = bulkCmd(
+                engine, auth, transport, ContextData(),
+                0, BULK_REPS,
+                ObjectType(ObjectIdentity(current_oid)),
+                lexicographicMode=False,
+            )
+            if errInd or errStat or not batch:
+                break
+            last_oid = None
+            for varBinds in batch:
                 for varBind in varBinds:
                     oid_str = str(varBind[0])
                     desc = str(varBind[1]).strip()
-                    if desc == interface_name.strip():
+                    last_oid = oid_str
+                    if desc == target:
                         try:
                             if_index = int(oid_str.split(".")[-1])
                         except (ValueError, IndexError):
@@ -309,6 +319,13 @@ def snmp_traffic_sync(host: str, snmp_config: dict, interface_name: str, port: i
                         break
                 if if_index is not None:
                     break
+            if if_index is not None or len(batch) < BULK_REPS:
+                break
+            # Advance to next OID for the next bulk request
+            if last_oid:
+                current_oid = last_oid
+            else:
+                break
 
         if if_index is None:
             result["error"] = f"Interface {interface_name!r} not found via SNMP walk"
