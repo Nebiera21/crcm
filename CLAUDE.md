@@ -178,6 +178,39 @@ Always call `net_connect.enable()` before sending config commands. Capture full 
 
 ---
 
+## SNMP Connection Pattern
+
+```python
+from app.core.snmp import router_snmp_config, snmp_is_configured, snmp_poll_sync, snmp_traffic_sync
+
+# Build snmp_config from a Router ORM object (decrypts v3 passwords automatically)
+snmp_cfg = router_snmp_config(router)
+
+# Check if router has SNMP configured before polling
+if snmp_is_configured(snmp_cfg):
+    # On-demand metrics poll (sysDescr, CPU, memory, …)
+    metrics = snmp_poll_sync(router.ip_address, snmp_cfg)
+
+    # Traffic poll — bytes_in/bytes_out are raw octet counters; caller computes delta
+    traffic = snmp_traffic_sync(router.ip_address, snmp_cfg, router.wan_interface)
+
+# snmp_config dict shape (built by router_snmp_config or assembled manually):
+# {
+#   "version": "v2c",          # "v1", "v2c", or "v3"
+#   "community": "public",     # v1/v2c — None for v3
+#   "v3_username": None,       # v3 only
+#   "v3_auth_protocol": None,  # "MD5", "SHA", "SHA256", "SHA384", "SHA512"
+#   "v3_auth_password": None,  # plaintext, decrypted by router_snmp_config()
+#   "v3_priv_protocol": None,  # "DES", "AES", "AES128", "AES192", "AES256"
+#   "v3_priv_password": None,
+#   "v3_security_level": None, # "noAuthNoPriv", "authNoPriv", "authPriv"
+# }
+```
+
+Both sync functions call `_ensure_event_loop()` internally — safe to call from Celery task threads after `asyncio.run()` has closed the loop. Never call them directly from FastAPI `async` routes; use the async shims `snmp_poll()` / `snmp_traffic()` which run them via `run_in_executor`.
+
+---
+
 ## Template System
 
 Templates are Jinja2 stored in the `templates` table. The `variables` column (JSONB) defines each variable's name, type, required flag, and default. Render flow: load template → render with user values → return preview string → user confirms → send to router via SSH.
@@ -303,18 +336,20 @@ When you change backend Python code or add a migration, and the app runs in Dock
 # 1. Run new migrations (never skip this after model changes)
 docker compose exec backend alembic upgrade head
 
-# 2. Restart backend + workers to pick up code changes
-docker compose restart backend celery celery-beat
+# 2. Rebuild image then force-recreate containers (restart alone keeps the OLD image)
+docker compose build backend
+docker compose up -d --force-recreate backend celery celery-beat
 ```
 
 When you change frontend code (React/TypeScript), the nginx container serves a compiled build — you must rebuild the image:
 
 ```bash
-# Rebuild and restart frontend only
-docker compose build frontend && docker compose up -d frontend
+docker compose build frontend && docker compose up -d --force-recreate frontend
 ```
 
 Then do a **hard refresh** in the browser (`Cmd+Shift+R`) to clear the cached JS bundle.
+
+> **`restart` vs `--force-recreate`**: `docker compose restart` only restarts the process inside the existing container — it does NOT pick up a newly built image. After `docker compose build`, always use `--force-recreate` to replace containers with fresh ones from the new image. This caused silent failures where code changes appeared to deploy but the old image kept running.
 
 > Missing migrations cause 500 errors on every endpoint that touches the affected table. Frontend code changes are invisible until the image is rebuilt — the browser will serve the old bundle even after a normal refresh.
 
@@ -351,3 +386,4 @@ Then do a **hard refresh** in the browser (`Cmd+Shift+R`) to clear the cached JS
 - [x] Phase 9 — Monitor module redesign (command presets in DB; multi-device SSH with Celery; multi-device SNMP bulk poll; compare modal with line-diff; CSV export; router selector with location/model filters)
 - [x] Phase 10 — WAN IP fallback (wan_ip_address + wan_ssh_port + use_wan_ip per router; 10s internal timeout then WAN retry for deploy + test-connection; connected_via recorded in config_history; WAN column in Inventory table; import CSV/Excel support for WAN fields; migration 0004)
 - [x] Phase 11 — Network Monitor page (continuous ping + SNMP traffic; Celery Beat 30s scheduler; ping_results + snmp_traffic_metrics tables; ifHC 64-bit counters with Redis rate calculation; wan_interface per router; Recharts area/line charts; Overview/Traffic/Ping tabs; admin retention settings; migration 0005)
+- [x] Phase 12 — SNMPv3 multi-version support + Network Monitor hardening (SNMPv1/v2c/v3 per-router config with auth/priv protocol + encrypted passwords; snmp_config dict API in core/snmp.py; Inventory form: SNMP version selector + v3 parameter fields + wan_interface field; Network Monitor: UTC timestamp fix via toUTC(), X-axis smart interval, SNMP version badge on router cards; pysnmp 6.x event-loop guard (_ensure_event_loop); migration 0006)
