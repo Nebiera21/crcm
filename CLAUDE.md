@@ -96,7 +96,9 @@ Show commands are stored in `command_presets` (DB table, not hardcoded). Migrati
 `POST /monitor/commands` (single router, all roles) runs synchronously via `run_in_executor`. `POST /monitor/commands/bulk` (operator+) dispatches a Celery task and returns a `job_id` for polling. The frontend picks the path based on how many routers are selected: 1 → direct, 2+ → Celery. Both paths normalize to the same `RouterRunResult[]` shape on the frontend.
 
 ### SNMP polling (Monitor page — on-demand)
-`core/snmp.py` wraps pysnmp SNMPv2c GET calls in a synchronous function (`snmp_poll_sync`) with a 5-second timeout. Async shim via `run_in_executor`. OIDs polled: sysDescr, sysUpTime, sysName, Cisco avgBusy5 (CPU), Cisco freeMem, ifNumber. Requires `snmp_community` on the router row. Bulk SNMP (`POST /monitor/snmp/bulk`) uses the `bulk_snmp_poll` Celery task — routers without `snmp_community` return an error row rather than failing the whole job.
+`core/snmp.py` wraps pysnmp SNMPv1/v2c/v3 GET calls in synchronous functions with a 5-second timeout. Async shim via `run_in_executor`. OIDs polled: sysDescr, sysUpTime, sysName, Cisco avgBusy5 (CPU), Cisco freeMem, ifNumber. All SNMP functions accept a `snmp_config` dict (not a bare community string) — use `router_snmp_config(router_orm)` to build it; v3 passwords are decrypted from Fernet-encrypted DB fields. `snmp_is_configured(snmp_config)` checks whether community (v1/v2c) or username (v3) is set. Bulk SNMP uses the `bulk_snmp_poll` Celery task — unconfigured routers return an error row.
+
+**SNMPv3 per-router config**: `snmp_version` (v1/v2c/v3), `snmp_v3_username`, `snmp_v3_auth_protocol` (MD5/SHA/SHA256/etc.), `snmp_v3_auth_password_encrypted`, `snmp_v3_priv_protocol` (DES/AES/AES192/AES256), `snmp_v3_priv_password_encrypted`, `snmp_v3_security_level` (noAuthNoPriv/authNoPriv/authPriv). Plaintext passwords accepted via API (`snmp_v3_auth_password`, `snmp_v3_priv_password`) and encrypted with Fernet in the inventory endpoint — never returned in responses.
 
 ### Network Monitor — continuous ping + traffic (Phase 11)
 Separate from the on-demand Monitor page. Celery Beat polls every 30s automatically.
@@ -332,6 +334,7 @@ Then do a **hard refresh** in the browser (`Cmd+Shift+R`) to clear the cached JS
 - **`pyasn1` pinned to `0.4.8`** — pysnmp 6.1.3 imports `pyasn1.compat.octets`, which was removed in pyasn1 0.5+. Do not upgrade pyasn1 without verifying pysnmp compatibility.
 - **pysnmp 6.x API change** — `getCmd`/`nextCmd` from `pysnmp.hlapi` now return a **single tuple** `(errInd, errStat, errIdx, varBinds)` directly, not a generator. `nextCmd`'s `varBinds` is `[[row1_vb], [row2_vb], ...]`. Old `for ... in getCmd(...)` silently fails inside try/except. See `core/snmp.py`.
 - **pysnmp event loop requirement** — pysnmp 6.x calls `asyncio.get_event_loop()` internally. After `asyncio.run()` closes the loop (e.g. between Celery task DB helpers), subsequent pysnmp calls fail with "no current event loop". `_ensure_event_loop()` in `core/snmp.py` creates a fresh one if needed. Call it at the start of any sync SNMP function that runs after `asyncio.run()`.
+- **DB timestamps naive UTC, browser parses as local** — PostgreSQL stores `TIMESTAMP WITHOUT TIME ZONE` and FastAPI/Pydantic v2 serializes as ISO without 'Z'. `new Date("2026-05-20T06:00:00")` in Chrome treats this as **local** time, not UTC. Always append 'Z' on the frontend before `new Date(iso + 'Z')` for correct UTC interpretation. See `toUTC()` in `NetworkMonitorPage.tsx`.
 
 ---
 
