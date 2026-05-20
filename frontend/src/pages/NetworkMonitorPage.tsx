@@ -479,17 +479,19 @@ function TrafficTableRow({ r, expanded, onToggle }: { r: RouterStatus; expanded:
 
 // ── Aggregate Traffic Chart ────────────────────────────────────────────────────
 
-function AggregateChart({ hours }: { hours: number }) {
+function AggregateChart({ hours, routerIds }: { hours: number; routerIds?: string[] }) {
   const [data, setData] = useState<AggregatePoint[]>([])
   const [loading, setLoading] = useState(false)
 
   useEffect(() => {
     setLoading(true)
-    apiClient.get<AggregatePoint[]>(`/network-monitor/traffic/aggregate?hours=${hours}`)
+    const params = new URLSearchParams({ hours: String(hours) })
+    routerIds?.forEach(id => params.append('router_ids', id))
+    apiClient.get<AggregatePoint[]>(`/network-monitor/traffic/aggregate?${params.toString()}`)
       .then(r => setData(r.data))
       .catch(() => setData([]))
       .finally(() => setLoading(false))
-  }, [hours])
+  }, [hours, routerIds?.join(',')])
 
   if (loading) return <div className="h-56 flex items-center justify-center text-gray-600 text-sm">Loading…</div>
   if (data.length === 0) return (
@@ -562,6 +564,11 @@ export default function NetworkMonitorPage() {
   const [showSettings, setShowSettings] = useState(false)
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set())
 
+  // Aggregate chart filter: 'all' | location string | 'custom'
+  const [aggFilter, setAggFilter] = useState<string>('all')
+  const [customRouterIds, setCustomRouterIds] = useState<Set<string>>(new Set())
+  const [showRouterPicker, setShowRouterPicker] = useState(false)
+
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const refreshRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -620,6 +627,16 @@ export default function NetworkMonitorPage() {
   const filtered = routers.filter(r =>
     !search || r.hostname.toLowerCase().includes(search.toLowerCase()) || r.ip_address.includes(search)
   )
+
+  // Unique locations (sorted, excluding null)
+  const locations = [...new Set(routers.map(r => r.location).filter(Boolean) as string[])].sort()
+
+  // Router IDs to pass to the aggregate chart (undefined = all)
+  const effectiveRouterIds: string[] | undefined = (() => {
+    if (aggFilter === 'all') return undefined
+    if (aggFilter === 'custom') return customRouterIds.size > 0 ? [...customRouterIds] : undefined
+    return routers.filter(r => r.location === aggFilter).map(r => r.router_id)
+  })()
 
   // Summary counts
   const online = routers.filter(r => routerHealth(r) === 'online').length
@@ -740,27 +757,96 @@ export default function NetworkMonitorPage() {
         <div className="space-y-5">
           {/* Aggregate chart */}
           <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
-            <div className="flex items-center justify-between mb-4">
+            <div className="flex items-start justify-between mb-4 flex-wrap gap-3">
               <div>
-                <h2 className="text-sm font-semibold text-white">Aggregate WAN Traffic — All Routers</h2>
+                <h2 className="text-sm font-semibold text-white">
+                  Aggregate WAN Traffic —{' '}
+                  {aggFilter === 'all' ? 'All Routers' :
+                   aggFilter === 'custom' ? `${customRouterIds.size} selected` :
+                   aggFilter}
+                </h2>
                 <p className="text-xs text-gray-500 mt-0.5">
                   <span className="inline-block w-2 h-2 rounded-full bg-blue-500 mr-1" />IN &nbsp;
                   <span className="inline-block w-2 h-2 rounded-full bg-purple-500 mr-1" />OUT (Mbps)
                 </p>
               </div>
-              <div className="flex gap-1">
-                {[1, 6, 24].map(h => (
+              <div className="flex items-center gap-2 flex-wrap">
+                {/* Hours selector */}
+                <div className="flex gap-1">
+                  {[1, 6, 24].map(h => (
+                    <button
+                      key={h}
+                      onClick={() => setHours(h)}
+                      className={`px-3 py-1 text-xs rounded-lg ${hours === h ? 'bg-brand-600 text-white' : 'bg-gray-800 text-gray-400 hover:text-white'}`}
+                    >
+                      {h}h
+                    </button>
+                  ))}
+                </div>
+                {/* Divider */}
+                <span className="text-gray-700 text-xs">|</span>
+                {/* Location / custom filter */}
+                <div className="flex gap-1 flex-wrap">
                   <button
-                    key={h}
-                    onClick={() => setHours(h)}
-                    className={`px-3 py-1 text-xs rounded-lg ${hours === h ? 'bg-brand-600 text-white' : 'bg-gray-800 text-gray-400 hover:text-white'}`}
+                    onClick={() => setAggFilter('all')}
+                    className={`px-2.5 py-1 text-xs rounded-lg transition ${aggFilter === 'all' ? 'bg-gray-600 text-white' : 'bg-gray-800 text-gray-400 hover:text-white'}`}
                   >
-                    {h}h
+                    All
                   </button>
-                ))}
+                  {locations.map(loc => (
+                    <button
+                      key={loc}
+                      onClick={() => setAggFilter(loc)}
+                      className={`px-2.5 py-1 text-xs rounded-lg transition ${aggFilter === loc ? 'bg-gray-600 text-white' : 'bg-gray-800 text-gray-400 hover:text-white'}`}
+                    >
+                      {loc}
+                    </button>
+                  ))}
+                  <div className="relative">
+                    <button
+                      onClick={() => { setAggFilter('custom'); setShowRouterPicker(p => !p) }}
+                      className={`px-2.5 py-1 text-xs rounded-lg transition ${aggFilter === 'custom' ? 'bg-brand-600 text-white' : 'bg-gray-800 text-gray-400 hover:text-white'}`}
+                    >
+                      Custom {aggFilter === 'custom' && customRouterIds.size > 0 ? `(${customRouterIds.size})` : '▾'}
+                    </button>
+                    {showRouterPicker && (
+                      <div className="absolute right-0 top-8 z-30 bg-gray-900 border border-gray-700 rounded-xl shadow-2xl p-3 min-w-56">
+                        <p className="text-xs font-semibold text-gray-400 mb-2 uppercase tracking-wider">Select routers</p>
+                        <div className="space-y-1 max-h-60 overflow-y-auto">
+                          {routers.filter(r => r.has_snmp).map(r => (
+                            <label key={r.router_id} className="flex items-center gap-2 cursor-pointer hover:bg-gray-800 px-1 py-0.5 rounded">
+                              <input
+                                type="checkbox"
+                                checked={customRouterIds.has(r.router_id)}
+                                onChange={e => {
+                                  setCustomRouterIds(prev => {
+                                    const next = new Set(prev)
+                                    if (e.target.checked) next.add(r.router_id)
+                                    else next.delete(r.router_id)
+                                    return next
+                                  })
+                                }}
+                                className="w-3.5 h-3.5 accent-brand-500"
+                              />
+                              <span className="text-xs text-gray-300 truncate">{r.hostname}</span>
+                              {r.location && <span className="text-xs text-gray-600 ml-auto shrink-0">{r.location}</span>}
+                            </label>
+                          ))}
+                          {routers.filter(r => r.has_snmp).length === 0 && (
+                            <p className="text-xs text-gray-600 py-2 text-center">No SNMP-enabled routers</p>
+                          )}
+                        </div>
+                        <div className="flex justify-between mt-2 pt-2 border-t border-gray-800">
+                          <button onClick={() => setCustomRouterIds(new Set())} className="text-xs text-gray-500 hover:text-white">Clear</button>
+                          <button onClick={() => setShowRouterPicker(false)} className="text-xs text-brand-400 hover:text-brand-300">Done</button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
             </div>
-            <AggregateChart hours={hours} />
+            <AggregateChart hours={hours} routerIds={effectiveRouterIds} />
           </div>
 
           {/* Per-router traffic table */}

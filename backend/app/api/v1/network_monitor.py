@@ -179,25 +179,45 @@ async def get_ping_history(
 @router.get("/traffic/aggregate", response_model=list[AggregatePoint])
 async def get_aggregate_traffic(
     hours: int = Query(1, ge=1, le=24),
+    router_ids: list[uuid.UUID] | None = Query(default=None),
     _: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[AggregatePoint]:
     since = datetime.now() - timedelta(hours=hours)
-    rows = (await db.execute(
-        text("""
-            SELECT
-                date_trunc('minute', timestamp) AS time_bucket,
-                SUM(bits_in_per_sec) AS total_in,
-                SUM(bits_out_per_sec) AS total_out,
-                COUNT(DISTINCT router_id) AS router_count
-            FROM snmp_traffic_metrics
-            WHERE timestamp >= :since
-              AND bits_in_per_sec IS NOT NULL
-            GROUP BY time_bucket
-            ORDER BY time_bucket
-        """),
-        {"since": since},
-    )).mappings().all()
+
+    if router_ids:
+        rows = (await db.execute(
+            text("""
+                SELECT
+                    date_trunc('minute', timestamp) AS time_bucket,
+                    SUM(bits_in_per_sec) AS total_in,
+                    SUM(bits_out_per_sec) AS total_out,
+                    COUNT(DISTINCT router_id) AS router_count
+                FROM snmp_traffic_metrics
+                WHERE timestamp >= :since
+                  AND bits_in_per_sec IS NOT NULL
+                  AND router_id = ANY(:ids)
+                GROUP BY time_bucket
+                ORDER BY time_bucket
+            """),
+            {"since": since, "ids": router_ids},
+        )).mappings().all()
+    else:
+        rows = (await db.execute(
+            text("""
+                SELECT
+                    date_trunc('minute', timestamp) AS time_bucket,
+                    SUM(bits_in_per_sec) AS total_in,
+                    SUM(bits_out_per_sec) AS total_out,
+                    COUNT(DISTINCT router_id) AS router_count
+                FROM snmp_traffic_metrics
+                WHERE timestamp >= :since
+                  AND bits_in_per_sec IS NOT NULL
+                GROUP BY time_bucket
+                ORDER BY time_bucket
+            """),
+            {"since": since},
+        )).mappings().all()
 
     return [
         AggregatePoint(
